@@ -1,0 +1,1074 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ButterFi - Sidewalk-to-Web bridge for students without home internet.
+  Receives text queries over Amazon Sidewalk, scrapes/summarizes web content,
+  and returns chunked responses sized for Sidewalk's constrained payloads.
+
+Parameters:
+  SidewalkDestinationName:
+    Type: String
+    Default: ButterFiDestination
+    Description: Name for the Sidewalk device destination
+
+  MaxChunkBytes:
+    Type: Number
+    Default: 240
+    Description: >
+      Max payload bytes per downlink chunk. Sidewalk FSK supports 250 bytes,
+      but we reserve 10 bytes for chunk headers (sequence number, total chunks, flags).
+
+  ScraperTimeoutSeconds:
+    Type: Number
+    Default: 30
+    Description: Timeout for the scraper Lambda
+
+  ChunkTTLHours:
+    Type: Number
+    Default: 24
+    Description: Hours to keep chunked responses in DynamoDB before TTL expiry
+
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment stage
+
+Resources:
+
+  # ---------------------------------------------------------------
+  # DynamoDB - Chunk store for multi-message responses
+  # ---------------------------------------------------------------
+  ChunkTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub butterfi-chunks-${Stage}
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: deviceId
+          AttributeType: S
+        - AttributeName: chunkKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: deviceId
+          KeyType: HASH
+        - AttributeName: chunkKey
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: ButterFi
+
+  # ---------------------------------------------------------------
+  # SQS - Decouple scraping from chunk delivery
+  # ---------------------------------------------------------------
+  ScrapeQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub butterfi-scrape-${Stage}
+      VisibilityTimeout: 60
+      MessageRetentionPeriod: 3600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ScrapeDeadLetterQueue.Arn
+        maxReceiveCount: 3
+
+  ScrapeDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub butterfi-scrape-dlq-${Stage}
+      MessageRetentionPeriod: 86400
+
+  # ---------------------------------------------------------------
+  # IAM - Lambda execution roles
+  # ---------------------------------------------------------------
+  UplinkLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub butterfi-uplink-role-${Stage}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ButterFiUplinkPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !GetAtt ScrapeQueue.Arn
+                - Effect: Allow
+                  Action:
+                    - iot:Publish
+                  Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/butterfi/resend/*
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt ChunkTable.Arn
+
+  ScraperLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub butterfi-scraper-role-${Stage}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ButterFiScraperPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource: !GetAtt ScrapeQueue.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:BatchWriteItem
+                Resource: !GetAtt ChunkTable.Arn
+              - Effect: Allow
+                Action:
+                  - iot:Publish
+                Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/butterfi/*
+              - Effect: Allow
+                Action:
+                  - iotwireless:SendDataToWirelessDevice
+                Resource: '*'
+
+  DownlinkLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub butterfi-downlink-role-${Stage}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ButterFiDownlinkPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Query
+                  - dynamodb:GetItem
+                Resource: !GetAtt ChunkTable.Arn
+              - Effect: Allow
+                Action:
+                  - iotwireless:SendDataToWirelessDevice
+                Resource: '*'
+
+  SidewalkRuleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub butterfi-iot-rule-role-${Stage}
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ButterFiIoTRulePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !GetAtt UplinkLambda.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # ---------------------------------------------------------------
+  # Lambda - Uplink handler (receives Sidewalk messages)
+  # ---------------------------------------------------------------
+  UplinkLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub butterfi-uplink-${Stage}
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt UplinkLambdaRole.Arn
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          SCRAPE_QUEUE_URL: !Ref ScrapeQueue
+          CHUNK_TABLE: !Ref ChunkTable
+          STAGE: !Ref Stage
+      Code:
+        ZipFile: |
+          """
+          ButterFi Uplink Handler
+          
+          Receives base64-encoded Sidewalk uplink payloads from IoT Core.
+          Parses the query (URL or text search) and enqueues a scrape job.
+          
+          Uplink payload format (binary):
+            byte 0:    message type (0x01 = query, 0x02 = chunk request, 0x03 = ack)
+            byte 1:    request ID (rolling 0-255, used to correlate response chunks)
+            byte 2..N: payload
+              - type 0x01: query string (URL or search terms)
+              - type 0x02: next needed chunk index as 1 byte
+              - type 0x03: last received chunk index as 1 byte
+          """
+          import json
+          import os
+          import base64
+          import boto3
+          import time
+
+          sqs = boto3.client('sqs')
+          dynamodb = boto3.resource('dynamodb')
+
+          QUEUE_URL = os.environ['SCRAPE_QUEUE_URL']
+          TABLE = os.environ['CHUNK_TABLE']
+
+          def handler(event, context):
+              print(json.dumps(event))
+
+              # IoT Core Sidewalk uplinks arrive with PayloadData (base64)
+              payload_b64 = event.get('PayloadData', '')
+              device_id = event.get('WirelessMetadata', {}).get('Sidewalk', {}).get('SidewalkId', 'unknown')
+
+              if not payload_b64:
+                  print('No payload data')
+                  return {'statusCode': 400}
+
+              raw = base64.b64decode(payload_b64)
+        if len(raw) < 2:
+                  print(f'Payload too short: {len(raw)} bytes')
+                  return {'statusCode': 400}
+
+              msg_type = raw[0]
+              request_id = raw[1]
+        body = raw[2:]
+
+        if msg_type == 0x01:
+          if not body:
+            print('Query payload missing')
+            return {'statusCode': 400}
+          query = body.decode('utf-8', errors='replace')
+        elif msg_type in (0x02, 0x03):
+          if len(body) != 1:
+            print(f'Invalid control payload length for type {msg_type:#x}: {len(body)}')
+            return {'statusCode': 400}
+          control_value = body[0]
+        else:
+          query = ''
+
+        if msg_type == 0x01:
+          print(f'device={device_id} type={msg_type:#x} req={request_id} query={query}')
+        elif msg_type in (0x02, 0x03):
+          print(f'device={device_id} type={msg_type:#x} req={request_id} value={control_value}')
+        else:
+          print(f'device={device_id} type={msg_type:#x} req={request_id}')
+
+              if msg_type == 0x01:  # New query
+                  sqs.send_message(
+                      QueueUrl=QUEUE_URL,
+                      MessageBody=json.dumps({
+                          'deviceId': device_id,
+                          'requestId': request_id,
+              'query': query,
+                          'timestamp': int(time.time())
+                      })
+                  )
+                  return {'statusCode': 202}
+
+              elif msg_type == 0x02:  # Re-request chunks
+          # Client is asking for chunks to be re-sent from the next
+          # needed chunk index; handled by the downlink lambda.
+                  iot = boto3.client('iot-data')
+                  iot.publish(
+                      topic=f'butterfi/resend/{device_id}',
+                      payload=json.dumps({
+                          'deviceId': device_id,
+              'requestId': request_id,
+              'startIdx': control_value
+                      })
+                  )
+                  return {'statusCode': 200}
+
+              elif msg_type == 0x03:  # ACK
+          print(f'ACK from {device_id} for chunk {control_value}')
+                  return {'statusCode': 200}
+
+              return {'statusCode': 400, 'body': 'Unknown message type'}
+
+  UplinkLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UplinkLambda
+      Action: lambda:InvokeFunction
+      Principal: iot.amazonaws.com
+      SourceArn: !GetAtt SidewalkUplinkRule.Arn
+
+  # ---------------------------------------------------------------
+  # Lambda - Scraper (fetches pages, chunks, sends downlinks)
+  # ---------------------------------------------------------------
+  ScraperLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub butterfi-scraper-${Stage}
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt ScraperLambdaRole.Arn
+      Timeout: !Ref ScraperTimeoutSeconds
+      MemorySize: 256
+      Environment:
+        Variables:
+          CHUNK_TABLE: !Ref ChunkTable
+          MAX_CHUNK_BYTES: !Ref MaxChunkBytes
+          CHUNK_TTL_HOURS: !Ref ChunkTTLHours
+          STAGE: !Ref Stage
+      Code:
+        ZipFile: |
+          """
+          ButterFi Scraper
+          
+          Triggered by SQS. Fetches a URL or performs a search,
+          strips HTML to plain text, chunks into Sidewalk-sized payloads,
+          stores chunks in DynamoDB, and sends the first chunk as a downlink.
+          
+          Chunk storage format in DynamoDB:
+            deviceId:  Sidewalk device ID (hash key)
+            chunkKey:  "{requestId}#{chunkIndex:04d}" (range key)
+            data:      base64-encoded chunk payload
+            total:     total number of chunks
+            ttl:       epoch expiry
+          
+          Downlink payload format (binary):
+            byte 0:    message type (0x81 = response chunk)
+            byte 1:    request ID
+            byte 2:    chunk index (0-based)
+            byte 3:    total chunks
+            byte 4..N: UTF-8 text chunk
+          """
+          import json
+          import os
+          import base64
+          import time
+          import urllib.request
+          import re
+          import socket
+          import boto3
+
+          # -------------------------------------------------------
+          # Force DNS through Cloudflare for Families (1.1.1.3)
+          # Blocks malware + adult content at the resolver level.
+          # This is a safety net for student-facing infrastructure.
+          # -------------------------------------------------------
+          import ctypes
+          try:
+              _libc = ctypes.CDLL('libc.so.6')
+          except OSError:
+              _libc = None
+
+          CF_FAMILIES_DNS = '1.1.1.3'
+          CF_FAMILIES_DNS_ALT = '1.0.0.3'
+
+          _original_getaddrinfo = socket.getaddrinfo
+
+          def _cf_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+              """Resolve hostnames via Cloudflare for Families (1.1.1.3).
+              Falls back to default resolver if CF is unreachable."""
+              # Don't intercept IP literals or AWS service endpoints
+              # (boto3 needs to reach AWS APIs without filtering)
+              try:
+                  socket.inet_aton(host)
+                  return _original_getaddrinfo(host, port, family, type, proto, flags)
+              except socket.error:
+                  pass
+
+              AWS_SUFFIXES = ('.amazonaws.com', '.aws.amazon.com', '.amazon.com')
+              if any(host.endswith(s) for s in AWS_SUFFIXES):
+                  return _original_getaddrinfo(host, port, family, type, proto, flags)
+
+              # Resolve via Cloudflare for Families using system DNS-over-UDP
+              import struct
+              def _dns_query(name, dns_server, timeout=3):
+                  """Minimal DNS A-record query."""
+                  # Build DNS query packet
+                  tx_id = os.urandom(2)
+                  flags = b'\x01\x00'  # standard query, recursion desired
+                  counts = b'\x00\x01\x00\x00\x00\x00\x00\x00'  # 1 question
+                  qname = b''
+                  for label in name.split('.'):
+                      qname += bytes([len(label)]) + label.encode('ascii')
+                  qname += b'\x00'
+                  qtype = b'\x00\x01'   # A record
+                  qclass = b'\x00\x01'  # IN class
+                  packet = tx_id + flags + counts + qname + qtype + qclass
+
+                  sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                  sock.settimeout(timeout)
+                  try:
+                      sock.sendto(packet, (dns_server, 53))
+                      resp, _ = sock.recvfrom(1024)
+                  finally:
+                      sock.close()
+
+                  # Parse answer section (skip header + question)
+                  # Header is 12 bytes, question is variable
+                  offset = 12
+                  # Skip question
+                  while resp[offset] != 0:
+                      offset += resp[offset] + 1
+                  offset += 5  # null byte + qtype(2) + qclass(2)
+
+                  # Read answers
+                  ips = []
+                  ancount = struct.unpack('!H', resp[6:8])[0]
+                  for _ in range(ancount):
+                      # Skip name (may be pointer)
+                      if resp[offset] & 0xC0 == 0xC0:
+                          offset += 2
+                      else:
+                          while resp[offset] != 0:
+                              offset += resp[offset] + 1
+                          offset += 1
+                      rtype = struct.unpack('!H', resp[offset:offset+2])[0]
+                      rdlen = struct.unpack('!H', resp[offset+8:offset+10])[0]
+                      offset += 10
+                      if rtype == 1 and rdlen == 4:  # A record
+                          ips.append(socket.inet_ntoa(resp[offset:offset+4]))
+                      offset += rdlen
+                  return ips
+
+              try:
+                  ips = _dns_query(host, CF_FAMILIES_DNS)
+                  if not ips:
+                      ips = _dns_query(host, CF_FAMILIES_DNS_ALT)
+              except Exception:
+                  # Cloudflare unreachable — fall back to default
+                  return _original_getaddrinfo(host, port, family, type, proto, flags)
+
+              if not ips:
+                  # Domain blocked by Cloudflare for Families or NXDOMAIN
+                  raise socket.gaierror(f'DNS resolution blocked for {host} (Cloudflare for Families)')
+
+              # Convert to getaddrinfo-style response
+              results = []
+              for ip in ips:
+                  results.append((socket.AF_INET, socket.SOCK_STREAM, 6, '', (ip, port or 80)))
+              return results
+
+          # Monkey-patch socket.getaddrinfo globally for this Lambda
+          socket.getaddrinfo = _cf_getaddrinfo
+
+          dynamodb = boto3.resource('dynamodb')
+          iot_wireless = boto3.client('iotwireless')
+
+          CHUNK_TABLE = os.environ['CHUNK_TABLE']
+          MAX_CHUNK = int(os.environ['MAX_CHUNK_BYTES'])
+          CHUNK_TTL = int(os.environ['CHUNK_TTL_HOURS'])
+
+          # Overhead: type(1) + requestId(1) + chunkIdx(1) + totalChunks(1) = 4 bytes
+          TEXT_CHUNK_SIZE = MAX_CHUNK - 4
+
+
+          def html_to_butterfi(html, source_url=''):
+              """Convert HTML to ButterFi markup — a compact, readable format
+              that preserves document structure while minimizing byte count.
+
+              ButterFi markup spec:
+                #  Heading 1
+                ## Heading 2
+                ### Heading 3
+                Regular paragraph text with >1[linked text] inline.
+                - Unordered list item
+                1. Ordered list item
+                ---
+                (separator)
+                >1 https://example.com
+                >2 https://other.com
+                (link references collected at the end)
+
+              The PWA renders these as interactive elements.
+              Links use numbered references to keep inline text short.
+              """
+              from html.parser import HTMLParser
+
+              class ButterFiParser(HTMLParser):
+                  def __init__(self):
+                      super().__init__()
+                      self.output = []
+                      self.links = {}        # ref_num -> url
+                      self.link_counter = 0
+                      self.tag_stack = []
+                      self.current_line = ''
+                      self.in_link = False
+                      self.link_text = ''
+                      self.link_href = ''
+                      self.in_list_item = False
+                      self.ordered_list_idx = 0
+                      self.skip = False      # inside script/style/nav/footer
+                      self.skip_depth = 0
+
+                      # Tags whose content we discard entirely
+                      self.skip_tags = {'script', 'style', 'nav', 'footer',
+                                        'header', 'noscript', 'svg', 'form',
+                                        'iframe', 'object', 'embed'}
+
+                  def _flush_line(self):
+                      line = self.current_line.strip()
+                      if line:
+                          self.output.append(line)
+                      self.current_line = ''
+
+                  def handle_starttag(self, tag, attrs):
+                      attrs_dict = dict(attrs)
+                      tag = tag.lower()
+
+                      if tag in self.skip_tags:
+                          self.skip = True
+                          self.skip_depth += 1
+                          return
+
+                      if self.skip:
+                          if tag in self.skip_tags:
+                              self.skip_depth += 1
+                          return
+
+                      self.tag_stack.append(tag)
+
+                      if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+                          self._flush_line()
+                          level = int(tag[1])
+                          prefix = '#' * min(level, 3)
+                          self.current_line = prefix + ' '
+
+                      elif tag == 'a' and 'href' in attrs_dict:
+                          href = attrs_dict['href']
+                          # Skip fragment-only and javascript links
+                          if href and not href.startswith('#') and not href.startswith('javascript:'):
+                              self.in_link = True
+                              self.link_text = ''
+                              self.link_href = href
+                              # Resolve relative URLs
+                              if source_url and not href.startswith(('http://', 'https://')):
+                                  from urllib.parse import urljoin
+                                  self.link_href = urljoin(source_url, href)
+
+                      elif tag == 'br':
+                          self._flush_line()
+
+                      elif tag in ('p', 'div', 'section', 'article', 'main', 'blockquote'):
+                          self._flush_line()
+
+                      elif tag == 'li':
+                          self._flush_line()
+                          self.in_list_item = True
+                          # Check if parent is ol
+                          if 'ol' in self.tag_stack:
+                              self.ordered_list_idx += 1
+                              self.current_line = f'{self.ordered_list_idx}. '
+                          else:
+                              self.current_line = '- '
+
+                      elif tag == 'ol':
+                          self._flush_line()
+                          self.ordered_list_idx = 0
+
+                      elif tag == 'ul':
+                          self._flush_line()
+
+                      elif tag == 'hr':
+                          self._flush_line()
+                          self.output.append('---')
+
+                      elif tag == 'img':
+                          alt = attrs_dict.get('alt', '')
+                          if alt and len(alt) < 100:
+                              self.current_line += f'[img: {alt}]'
+
+                  def handle_endtag(self, tag):
+                      tag = tag.lower()
+
+                      if tag in self.skip_tags and self.skip:
+                          self.skip_depth -= 1
+                          if self.skip_depth <= 0:
+                              self.skip = False
+                              self.skip_depth = 0
+                          return
+
+                      if self.skip:
+                          return
+
+                      if self.tag_stack and self.tag_stack[-1] == tag:
+                          self.tag_stack.pop()
+
+                      if tag in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+                          self._flush_line()
+
+                      elif tag == 'a' and self.in_link:
+                          text = self.link_text.strip()
+                          if text and self.link_href:
+                              self.link_counter += 1
+                              ref = self.link_counter
+                              self.links[ref] = self.link_href
+                              self.current_line += f'>{ref}[{text}]'
+                          elif text:
+                              self.current_line += text
+                          self.in_link = False
+                          self.link_text = ''
+                          self.link_href = ''
+
+                      elif tag in ('p', 'div', 'section', 'article', 'main', 'blockquote'):
+                          self._flush_line()
+
+                      elif tag == 'li':
+                          self._flush_line()
+                          self.in_list_item = False
+
+                      elif tag in ('ol', 'ul'):
+                          self._flush_line()
+
+                  def handle_data(self, data):
+                      if self.skip:
+                          return
+                      # Collapse whitespace within text runs
+                      text = re.sub(r'\s+', ' ', data)
+                      if self.in_link:
+                          self.link_text += text
+                      else:
+                          self.current_line += text
+
+                  def handle_entityref(self, name):
+                      entities = {'amp': '&', 'lt': '<', 'gt': '>', 'quot': '"',
+                                  'apos': "'", 'nbsp': ' ', 'mdash': '-', 'ndash': '-',
+                                  'laquo': '"', 'raquo': '"', 'ldquo': '"', 'rdquo': '"',
+                                  'lsquo': "'", 'rsquo': "'"}
+                      char = entities.get(name, f'&{name};')
+                      if self.in_link:
+                          self.link_text += char
+                      elif not self.skip:
+                          self.current_line += char
+
+                  def handle_charref(self, name):
+                      try:
+                          if name.startswith('x'):
+                              char = chr(int(name[1:], 16))
+                          else:
+                              char = chr(int(name))
+                      except (ValueError, OverflowError):
+                          char = ''
+                      if self.in_link:
+                          self.link_text += char
+                      elif not self.skip:
+                          self.current_line += char
+
+                  def get_result(self):
+                      self._flush_line()
+                      # Remove consecutive blank entries and excessive whitespace
+                      lines = []
+                      prev_blank = False
+                      for line in self.output:
+                          if not line:
+                              if not prev_blank:
+                                  lines.append('')
+                              prev_blank = True
+                          else:
+                              lines.append(line)
+                              prev_blank = False
+
+                      # Append link references
+                      if self.links:
+                          lines.append('---')
+                          for ref in sorted(self.links.keys()):
+                              lines.append(f'>{ref} {self.links[ref]}')
+
+                      return '\n'.join(lines)
+
+              parser = ButterFiParser()
+              try:
+                  parser.feed(html)
+              except Exception:
+                  # If parsing fails, fall back to brutal strip
+                  text = re.sub(r'<(script|style)[^>]*>.*?</\1>', '', html,
+                                flags=re.DOTALL | re.IGNORECASE)
+                  text = re.sub(r'<[^>]+>', ' ', text)
+                  text = re.sub(r'\s+', ' ', text).strip()
+                  return text
+
+              return parser.get_result()
+
+
+          def fetch_and_extract(query):
+              """Fetch URL or search, return ButterFi markup."""
+              if query.startswith('http://') or query.startswith('https://'):
+                  url = query
+              else:
+                  url = f'https://html.duckduckgo.com/html/?q={urllib.request.quote(query)}'
+
+              req = urllib.request.Request(url, headers={
+                  'User-Agent': 'ButterFi/1.0 (educational-access-bridge)'
+              })
+              try:
+                  with urllib.request.urlopen(req, timeout=15) as resp:
+                      final_url = resp.url  # capture redirects
+                      html = resp.read().decode('utf-8', errors='replace')
+                  return html_to_butterfi(html, source_url=final_url)
+              except Exception as e:
+                  return f'Error fetching content: {str(e)}'
+
+
+          def chunk_text(text, max_bytes):
+              """Split text into UTF-8 byte chunks, respecting character boundaries."""
+              encoded = text.encode('utf-8')
+              chunks = []
+              offset = 0
+              while offset < len(encoded):
+                  end = offset + max_bytes
+                  if end >= len(encoded):
+                      chunks.append(encoded[offset:])
+                  else:
+                      # Back up to avoid splitting a multi-byte UTF-8 character
+                      while end > offset and (encoded[end] & 0xC0) == 0x80:
+                          end -= 1
+                      chunks.append(encoded[offset:end])
+                  offset = end
+              return chunks
+
+
+          def send_downlink(device_id, request_id, chunk_idx, total_chunks, chunk_data):
+              """Send a single chunk as a Sidewalk downlink."""
+              payload = bytes([0x81, request_id, chunk_idx, total_chunks]) + chunk_data
+              payload_b64 = base64.b64encode(payload).decode('ascii')
+
+              try:
+                  iot_wireless.send_data_to_wireless_device(
+                      Id=device_id,
+                      TransmitMode=0,  # 0 = best effort
+                      PayloadData=payload_b64
+                  )
+                  print(f'Sent chunk {chunk_idx}/{total_chunks} to {device_id}')
+              except Exception as e:
+                  print(f'Downlink failed: {e}')
+
+
+          def handler(event, context):
+              table = dynamodb.Table(CHUNK_TABLE)
+              ttl_epoch = int(time.time()) + (CHUNK_TTL * 3600)
+
+              for record in event['Records']:
+                  msg = json.loads(record['body'])
+                  device_id = msg['deviceId']
+                  request_id = msg['requestId']
+                  query = msg['query']
+
+                  print(f'Scraping for device={device_id} req={request_id} query={query}')
+
+                  # Fetch and extract text
+                  text = fetch_and_extract(query)
+
+                  # Truncate to reasonable length (avoid massive pages)
+                  max_text = TEXT_CHUNK_SIZE * 255  # max 255 chunks
+                  if len(text.encode('utf-8')) > max_text:
+                      text = text[:max_text]
+
+                  # Chunk it
+                  chunks = chunk_text(text, TEXT_CHUNK_SIZE)
+                  total = min(len(chunks), 255)
+
+                  print(f'Generated {total} chunks from {len(text)} chars')
+
+                  # Store all chunks in DynamoDB
+                  with table.batch_writer() as batch:
+                      for i, chunk in enumerate(chunks[:255]):
+                          batch.put_item(Item={
+                              'deviceId': device_id,
+                              'chunkKey': f'{request_id:03d}#{i:04d}',
+                              'data': base64.b64encode(chunk).decode('ascii'),
+                              'total': total,
+                              'requestId': request_id,
+                              'query': query[:200],
+                              'ttl': ttl_epoch
+                          })
+
+                  # Send first chunk immediately as downlink
+                  if chunks:
+                      send_downlink(device_id, request_id, 0, total, chunks[0])
+
+              return {'statusCode': 200}
+
+  ScraperEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt ScrapeQueue.Arn
+      FunctionName: !Ref ScraperLambda
+      BatchSize: 1
+      Enabled: true
+
+  # ---------------------------------------------------------------
+  # Lambda - Downlink handler (resends chunks on request)
+  # ---------------------------------------------------------------
+  DownlinkLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub butterfi-downlink-${Stage}
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt DownlinkLambdaRole.Arn
+      Timeout: 15
+      MemorySize: 128
+      Environment:
+        Variables:
+          CHUNK_TABLE: !Ref ChunkTable
+          STAGE: !Ref Stage
+      Code:
+        ZipFile: |
+          """
+          ButterFi Downlink Handler
+          
+          Triggered via IoT Rule when a device requests chunk resend.
+          Queries DynamoDB for stored chunks and sends them as downlinks.
+          
+          The device requests more data by sending:
+            type=0x02, requestId, body=<next needed chunk index>
+          """
+          import json
+          import os
+          import base64
+          import boto3
+
+          dynamodb = boto3.resource('dynamodb')
+          iot_wireless = boto3.client('iotwireless')
+
+          CHUNK_TABLE = os.environ['CHUNK_TABLE']
+
+
+          def handler(event, context):
+              print(json.dumps(event))
+
+              device_id = event.get('deviceId', '')
+              request_id = event.get('requestId', 0)
+              start_idx = int(event.get('startIdx', 0))
+
+              if not device_id:
+                  return {'statusCode': 400}
+
+              table = dynamodb.Table(CHUNK_TABLE)
+
+              # Query chunks for this device + request
+              response = table.query(
+                  KeyConditionExpression='deviceId = :did AND begins_with(chunkKey, :prefix)',
+                  ExpressionAttributeValues={
+                      ':did': device_id,
+                      ':prefix': f'{request_id:03d}#'
+                  }
+              )
+
+              items = sorted(response.get('Items', []), key=lambda x: x['chunkKey'])
+
+              if not items:
+                  print(f'No chunks found for {device_id} req={request_id}')
+                  return {'statusCode': 404}
+
+              total = items[0].get('total', len(items))
+
+              # Send chunks starting from requested index
+              # Rate-limit: Sidewalk has uplink/downlink rate limits,
+              # so we send a few at a time and let the device re-request
+              max_send = 3  # conservative batch to avoid rate limiting
+              sent = 0
+
+              for item in items:
+                  idx = int(item['chunkKey'].split('#')[1])
+                  if idx < start_idx:
+                      continue
+                  if sent >= max_send:
+                      break
+
+                  chunk_data = base64.b64decode(item['data'])
+                  payload = bytes([0x81, request_id, idx, total]) + chunk_data
+                  payload_b64 = base64.b64encode(payload).decode('ascii')
+
+                  try:
+                      iot_wireless.send_data_to_wireless_device(
+                          Id=device_id,
+                          TransmitMode=0,
+                          PayloadData=payload_b64
+                      )
+                      print(f'Resent chunk {idx}/{total} to {device_id}')
+                      sent += 1
+                  except Exception as e:
+                      print(f'Downlink failed for chunk {idx}: {e}')
+                      break
+
+              return {'statusCode': 200, 'sent': sent}
+
+  # ---------------------------------------------------------------
+  # IoT Core - Sidewalk destination and rules
+  # ---------------------------------------------------------------
+  SidewalkDestination:
+    Type: AWS::IoTWireless::Destination
+    Properties:
+      Name: !Ref SidewalkDestinationName
+      Expression: ButterFiUplinkRule
+      ExpressionType: RuleName
+      RoleArn: !GetAtt SidewalkRuleRole.Arn
+      Description: Routes ButterFi Sidewalk uplinks to processing Lambda
+
+  SidewalkUplinkRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: ButterFiUplinkRule
+      TopicRulePayload:
+        Sql: "SELECT * FROM 'butterfi/uplink'"
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt UplinkLambda.Arn
+        ErrorAction:
+          CloudwatchLogs:
+            LogGroupName: !Ref UplinkErrorLogGroup
+            RoleArn: !GetAtt SidewalkRuleRole.Arn
+        RuleDisabled: false
+
+  # Resend rule - triggers downlink lambda when device requests chunks
+  ResendRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub ButterFiResendRule
+      TopicRulePayload:
+        Sql: "SELECT * FROM 'butterfi/resend/+'"
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt DownlinkLambda.Arn
+        RuleDisabled: false
+
+  DownlinkLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref DownlinkLambda
+      Action: lambda:InvokeFunction
+      Principal: iot.amazonaws.com
+      SourceArn: !GetAtt ResendRule.Arn
+
+  # ---------------------------------------------------------------
+  # CloudWatch - Logging and monitoring
+  # ---------------------------------------------------------------
+  UplinkErrorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /butterfi/uplink-errors-${Stage}
+      RetentionInDays: 14
+
+  UplinkLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/butterfi-uplink-${Stage}
+      RetentionInDays: 14
+
+  ScraperLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/butterfi-scraper-${Stage}
+      RetentionInDays: 14
+
+  DownlinkLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/butterfi-downlink-${Stage}
+      RetentionInDays: 14
+
+  # ---------------------------------------------------------------
+  # CloudWatch - Alarms for operational visibility
+  # ---------------------------------------------------------------
+  DLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub butterfi-dlq-messages-${Stage}
+      AlarmDescription: Messages in the dead letter queue indicate scrape failures
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt ScrapeDeadLetterQueue.QueueName
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  ScraperErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub butterfi-scraper-errors-${Stage}
+      AlarmDescription: Scraper Lambda invocation errors
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ScraperLambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  SidewalkDestinationName:
+    Description: Sidewalk destination name - use when provisioning devices
+    Value: !Ref SidewalkDestinationName
+
+  ScrapeQueueUrl:
+    Description: SQS queue URL for scrape jobs
+    Value: !Ref ScrapeQueue
+
+  ChunkTableName:
+    Description: DynamoDB table for response chunks
+    Value: !Ref ChunkTable
+
+  UplinkLambdaArn:
+    Description: Uplink handler Lambda ARN
+    Value: !GetAtt UplinkLambda.Arn
+
+  ScraperLambdaArn:
+    Description: Scraper Lambda ARN
+    Value: !GetAtt ScraperLambda.Arn
+
+  DownlinkLambdaArn:
+    Description: Downlink handler Lambda ARN
+    Value: !GetAtt DownlinkLambda.Arn
+
+  DeployCommand:
+    Description: Deploy with
+    Value: !Sub >
+      aws cloudformation deploy
+      --template-file template.yaml
+      --stack-name butterfi-${Stage}
+      --capabilities CAPABILITY_NAMED_IAM
+      --region us-east-1
+      --parameter-overrides Stage=${Stage}

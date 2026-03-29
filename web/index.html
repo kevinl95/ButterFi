@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ButterFi Console</title>
+    <meta name="theme-color" content="#126a52">
+    <meta name="description" content="Installable Chrome Web Serial client for ButterFi Sidewalk devices.">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icons/icon-any.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero">
+            <div>
+                <p class="eyebrow">Chrome Web Serial Console</p>
+                <h1>ButterFi device bridge</h1>
+                <p class="hero-copy">
+                    Connect a ButterFi dongle, send a query over USB serial, and inspect the chunked
+                    response stream coming back from the Sidewalk firmware.
+                </p>
+            </div>
+            <div class="hero-note">
+                <p>Requires Chrome or Edge on a secure context such as localhost.</p>
+                <p id="support-indicator">Checking browser support…</p>
+                <div class="install-row">
+                    <button id="install-button" class="button button-small button-primary" hidden>Install app</button>
+                    <span id="install-status" class="install-status">Install unavailable</span>
+                </div>
+            </div>
+        </header>
+
+        <main class="layout-grid">
+            <section class="panel panel-connection">
+                <div class="panel-heading">
+                    <h2>Connection</h2>
+                    <span id="connection-badge" class="pill pill-muted">Disconnected</span>
+                </div>
+
+                <div class="button-row">
+                    <button id="connect-button" class="button button-primary">Connect</button>
+                    <button id="disconnect-button" class="button" disabled>Disconnect</button>
+                    <button id="status-button" class="button" disabled>Request status</button>
+                </div>
+
+                <dl class="telemetry-grid">
+                    <div>
+                        <dt>Device state</dt>
+                        <dd id="device-state">Unknown</dd>
+                    </div>
+                    <div>
+                        <dt>Link</dt>
+                        <dd id="link-state">Unknown</dd>
+                    </div>
+                    <div>
+                        <dt>Active request</dt>
+                        <dd id="active-request">None</dd>
+                    </div>
+                    <div>
+                        <dt>Port</dt>
+                        <dd id="port-info">Not connected</dd>
+                    </div>
+                </dl>
+            </section>
+
+            <section class="panel panel-compose">
+                <div class="panel-heading">
+                    <h2>Compose</h2>
+                    <span id="query-badge" class="pill pill-muted">Idle</span>
+                </div>
+
+                <label class="field-label" for="query-input">Query</label>
+                <textarea
+                    id="query-input"
+                    rows="6"
+                    placeholder="Ask ButterFi for text content or paste a URL"
+                ></textarea>
+
+                <div class="button-row">
+                    <button id="send-button" class="button button-primary" disabled>Send query</button>
+                    <button id="cancel-button" class="button" disabled>Cancel</button>
+                    <button id="resend-button" class="button" disabled>Resend missing chunk</button>
+                </div>
+
+                <p id="query-meta" class="helper-text">No request in flight.</p>
+            </section>
+
+            <section class="panel panel-response panel-span-two">
+                <div class="panel-heading">
+                    <h2>Response</h2>
+                    <span id="chunk-progress" class="pill pill-muted">0 / 0 chunks</span>
+                </div>
+
+                <div class="response-stats">
+                    <div>
+                        <span class="stat-label">Request</span>
+                        <strong id="response-request">None</strong>
+                    </div>
+                    <div>
+                        <span class="stat-label">Missing chunks</span>
+                        <strong id="missing-count">0</strong>
+                    </div>
+                    <div>
+                        <span class="stat-label">Transfer</span>
+                        <strong id="transfer-state">Idle</strong>
+                    </div>
+                </div>
+
+                <pre id="response-output" class="response-output">No response yet.</pre>
+            </section>
+
+            <section class="panel panel-log panel-span-two">
+                <div class="panel-heading">
+                    <h2>Session log</h2>
+                    <button id="clear-log-button" class="button button-small">Clear log</button>
+                </div>
+                <ol id="log-output" class="log-output"></ol>
+            </section>
+        </main>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+</body>
+</html>

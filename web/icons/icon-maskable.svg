@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">ButterFi Console Maskable Icon</title>
+  <desc id="desc">Maskable ButterFi icon with centered BF monogram.</desc>
+  <defs>
+    <radialGradient id="bg" cx="28%" cy="20%" r="92%">
+      <stop offset="0%" stop-color="#1b8768"/>
+      <stop offset="100%" stop-color="#09392f"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="182" fill="#fff9ef"/>
+  <circle cx="256" cy="256" r="154" fill="none" stroke="#f0b567" stroke-width="22" opacity="0.9"/>
+  <path d="M188 175h81c42 0 67 20 67 54 0 23-12 39-35 48 29 10 44 28 44 57 0 38-28 62-75 62h-82V175zm75 92c24 0 38-8 38-24s-13-23-38-23h-40v47h40zm9 92c24 0 40-10 40-29 0-20-15-29-45-29h-44v58h49z" fill="#16362d"/>
+  <path d="M145 130c33-23 70-34 111-34 43 0 82 12 114 36" fill="none" stroke="#dff4ea" stroke-linecap="round" stroke-width="16" opacity="0.7"/>
+</svg>

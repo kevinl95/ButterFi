@@ -1,0 +1,47 @@
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Python caches and local virtual environments
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local AWS/SAM artifacts
+.aws-sam/
+
+# Common local environment files
+.env
+.env.*.local
+
+# Logs and temporary files
+*.log
+
+# Browser app dependencies and build outputs
+node_modules/
+dist/
+.vite/
+coverage/
+
+# West workspace metadata and synced SDK dependencies.
+# Keep the imported app repo itself visible; ignore the reproducible workspace around it.
+/vendor/.west/
+/vendor/bootloader/
+/vendor/modules/
+/vendor/nrf/
+/vendor/nrfxlib/
+/vendor/sidewalk/
+/vendor/test/
+/vendor/tools/
+/vendor/zephyr/
+
+# Zephyr/NCS build outputs for the ButterFi-integrated RAK app
+/vendor/RAK4630-Amazon-Sidewalk-Example/build/
