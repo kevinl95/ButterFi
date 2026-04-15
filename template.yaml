@@ -27,12 +27,6 @@ Parameters:
     Default: 24
     Description: Hours to keep chunked responses in DynamoDB before TTL expiry
 
-  Stage:
-    Type: String
-    Default: dev
-    AllowedValues: [dev, staging, prod]
-    Description: Deployment stage
-
 Resources:
 
   # ---------------------------------------------------------------
@@ -41,7 +35,6 @@ Resources:
   ChunkTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub butterfi-chunks-${Stage}
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: deviceId
@@ -66,7 +59,6 @@ Resources:
   ScrapeQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub butterfi-scrape-${Stage}
       VisibilityTimeout: 60
       MessageRetentionPeriod: 3600
       RedrivePolicy:
@@ -76,7 +68,6 @@ Resources:
   ScrapeDeadLetterQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: !Sub butterfi-scrape-dlq-${Stage}
       MessageRetentionPeriod: 86400
 
   # ---------------------------------------------------------------
@@ -85,7 +76,6 @@ Resources:
   UplinkLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub butterfi-uplink-role-${Stage}
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -104,10 +94,10 @@ Resources:
                 Action:
                   - sqs:SendMessage
                 Resource: !GetAtt ScrapeQueue.Arn
-                - Effect: Allow
-                  Action:
-                    - iot:Publish
-                  Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/butterfi/resend/*
+              - Effect: Allow
+                Action:
+                  - iot:Publish
+                Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/butterfi/resend/*'
               - Effect: Allow
                 Action:
                   - dynamodb:PutItem
@@ -117,7 +107,6 @@ Resources:
   ScraperLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub butterfi-scraper-role-${Stage}
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -146,7 +135,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - iot:Publish
-                Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/butterfi/*
+                Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/butterfi/*'
               - Effect: Allow
                 Action:
                   - iotwireless:SendDataToWirelessDevice
@@ -155,7 +144,6 @@ Resources:
   DownlinkLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub butterfi-downlink-role-${Stage}
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -183,7 +171,6 @@ Resources:
   SidewalkRuleRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub butterfi-iot-rule-role-${Stage}
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -207,13 +194,187 @@ Resources:
                   - logs:PutLogEvents
                 Resource: '*'
 
+  DestinationManagerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ButterFiDestinationManagerPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iotwireless:CreateDestination
+                  - iotwireless:UpdateDestination
+                  - iotwireless:DeleteDestination
+                  - iotwireless:GetDestination
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: !GetAtt SidewalkRuleRole.Arn
+
+  DestinationManagerLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt DestinationManagerLambdaRole.Arn
+      Timeout: 60
+      MemorySize: 128
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import urllib.request
+          import boto3
+          from botocore.exceptions import ClientError, EndpointConnectionError
+
+          SUPPORTED_REGIONS = set(boto3.session.Session().get_available_regions('iotwireless'))
+
+          def get_client(props):
+              region = props.get('Region') or os.environ.get('AWS_REGION')
+              return boto3.client('iotwireless', region_name=region)
+
+          def send_response(event, context, status, data, physical_resource_id=None, reason=None):
+              body = {
+                  'Status': status,
+                  'Reason': reason or f'See CloudWatch Log Stream: {context.log_stream_name}',
+                  'PhysicalResourceId': physical_resource_id or context.log_stream_name,
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'Data': data,
+              }
+              request = urllib.request.Request(
+                  event['ResponseURL'],
+                  data=json.dumps(body).encode('utf-8'),
+                  method='PUT',
+                  headers={'content-type': ''},
+              )
+              with urllib.request.urlopen(request):
+                  return
+
+          def destination_arn(name, event):
+              return f"arn:aws:iotwireless:{event['ResourceProperties']['Region']}:{event['ResourceProperties']['AccountId']}:destination/{name}"
+
+          def create_destination(props, event):
+              client = get_client(props)
+              client.create_destination(
+                  Name=props['Name'],
+                  ExpressionType=props['ExpressionType'],
+                  Expression=props['Expression'],
+                  Description=props.get('Description', ''),
+                  RoleArn=props['RoleArn'],
+              )
+              return props['Name']
+
+          def update_destination(props, old_props, event):
+              new_name = props['Name']
+              old_name = old_props['Name']
+              client = get_client(props)
+
+              if new_name != old_name:
+                  create_destination(props, event)
+                  try:
+                      client.delete_destination(Name=old_name)
+                  except ClientError as exc:
+                      if exc.response['Error']['Code'] != 'ResourceNotFoundException':
+                          raise
+                  return new_name
+
+              client.update_destination(
+                  Name=new_name,
+                  ExpressionType=props['ExpressionType'],
+                  Expression=props['Expression'],
+                  Description=props.get('Description', ''),
+                  RoleArn=props['RoleArn'],
+              )
+              return new_name
+
+          def delete_destination(name):
+              client = boto3.client('iotwireless', region_name=os.environ.get('AWS_REGION'))
+              try:
+                  client.delete_destination(Name=name)
+              except ClientError as exc:
+                  if exc.response['Error']['Code'] != 'ResourceNotFoundException':
+                      raise
+
+          def handler(event, context):
+              props = event['ResourceProperties']
+              request_type = event['RequestType']
+              region = props.get('Region') or os.environ.get('AWS_REGION')
+
+              try:
+                  if region not in SUPPORTED_REGIONS:
+                      raise ValueError(
+                          'IoT Wireless destinations are not available in '
+                          f'{region}. Deploy this stack in a supported region such as '
+                          f'{", ".join(sorted(SUPPORTED_REGIONS))}.'
+                      )
+
+                  if request_type == 'Create':
+                      name = create_destination(props, event)
+                  elif request_type == 'Update':
+                      name = update_destination(props, event['OldResourceProperties'], event)
+                  elif request_type == 'Delete':
+                      name = event.get('PhysicalResourceId', props['Name'])
+                      delete_destination(name)
+                  else:
+                      raise ValueError(f'Unsupported request type: {request_type}')
+
+                  send_response(
+                      event,
+                      context,
+                      'SUCCESS',
+                      {
+                          'Name': name,
+                          'Arn': destination_arn(name, event),
+                      },
+                      physical_resource_id=name,
+                  )
+              except EndpointConnectionError:
+                      send_response(
+                      event,
+                      context,
+                      'FAILED',
+                      {
+                          'Error': (
+                            f'IoT Wireless endpoint is unavailable in {region}. '
+                              f'Deploy this stack in a supported region such as {", ".join(sorted(SUPPORTED_REGIONS))}.'
+                          )
+                      },
+                      physical_resource_id=event.get('PhysicalResourceId', props.get('Name', context.log_stream_name)),
+                      reason=(
+                          f'IoT Wireless endpoint is unavailable in {region}. '
+                          f'Deploy this stack in a supported region such as {", ".join(sorted(SUPPORTED_REGIONS))}.'
+                      )
+                  )
+              except Exception as exc:
+                  send_response(
+                      event,
+                      context,
+                      'FAILED',
+                      {'Error': str(exc)},
+                      physical_resource_id=event.get('PhysicalResourceId', props.get('Name', context.log_stream_name)),
+                      reason=str(exc),
+                  )
+
   # ---------------------------------------------------------------
   # Lambda - Uplink handler (receives Sidewalk messages)
   # ---------------------------------------------------------------
   UplinkLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub butterfi-uplink-${Stage}
       Runtime: python3.12
       Handler: index.handler
       Role: !GetAtt UplinkLambdaRole.Arn
@@ -223,7 +384,6 @@ Resources:
         Variables:
           SCRAPE_QUEUE_URL: !Ref ScrapeQueue
           CHUNK_TABLE: !Ref ChunkTable
-          STAGE: !Ref Stage
       Code:
         ZipFile: |
           """
@@ -264,33 +424,33 @@ Resources:
                   return {'statusCode': 400}
 
               raw = base64.b64decode(payload_b64)
-        if len(raw) < 2:
+              if len(raw) < 2:
                   print(f'Payload too short: {len(raw)} bytes')
                   return {'statusCode': 400}
 
               msg_type = raw[0]
               request_id = raw[1]
-        body = raw[2:]
+              body = raw[2:]
+              query = ''
+              control_value = None
 
-        if msg_type == 0x01:
-          if not body:
-            print('Query payload missing')
-            return {'statusCode': 400}
-          query = body.decode('utf-8', errors='replace')
-        elif msg_type in (0x02, 0x03):
-          if len(body) != 1:
-            print(f'Invalid control payload length for type {msg_type:#x}: {len(body)}')
-            return {'statusCode': 400}
-          control_value = body[0]
-        else:
-          query = ''
+              if msg_type == 0x01:
+                  if not body:
+                      print('Query payload missing')
+                      return {'statusCode': 400}
+                  query = body.decode('utf-8', errors='replace')
+              elif msg_type in (0x02, 0x03):
+                  if len(body) != 1:
+                      print(f'Invalid control payload length for type {msg_type:#x}: {len(body)}')
+                      return {'statusCode': 400}
+                  control_value = body[0]
 
-        if msg_type == 0x01:
-          print(f'device={device_id} type={msg_type:#x} req={request_id} query={query}')
-        elif msg_type in (0x02, 0x03):
-          print(f'device={device_id} type={msg_type:#x} req={request_id} value={control_value}')
-        else:
-          print(f'device={device_id} type={msg_type:#x} req={request_id}')
+              if msg_type == 0x01:
+                  print(f'device={device_id} type={msg_type:#x} req={request_id} query={query}')
+              elif msg_type in (0x02, 0x03):
+                  print(f'device={device_id} type={msg_type:#x} req={request_id} value={control_value}')
+              else:
+                  print(f'device={device_id} type={msg_type:#x} req={request_id}')
 
               if msg_type == 0x01:  # New query
                   sqs.send_message(
@@ -298,28 +458,28 @@ Resources:
                       MessageBody=json.dumps({
                           'deviceId': device_id,
                           'requestId': request_id,
-              'query': query,
+                          'query': query,
                           'timestamp': int(time.time())
                       })
                   )
                   return {'statusCode': 202}
 
               elif msg_type == 0x02:  # Re-request chunks
-          # Client is asking for chunks to be re-sent from the next
-          # needed chunk index; handled by the downlink lambda.
+                  # Client is asking for chunks to be re-sent from the next
+                  # needed chunk index; handled by the downlink lambda.
                   iot = boto3.client('iot-data')
                   iot.publish(
                       topic=f'butterfi/resend/{device_id}',
                       payload=json.dumps({
                           'deviceId': device_id,
-              'requestId': request_id,
-              'startIdx': control_value
+                          'requestId': request_id,
+                          'startIdx': control_value
                       })
                   )
                   return {'statusCode': 200}
 
               elif msg_type == 0x03:  # ACK
-          print(f'ACK from {device_id} for chunk {control_value}')
+                  print(f'ACK from {device_id} for chunk {control_value}')
                   return {'statusCode': 200}
 
               return {'statusCode': 400, 'body': 'Unknown message type'}
@@ -338,7 +498,6 @@ Resources:
   ScraperLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub butterfi-scraper-${Stage}
       Runtime: python3.12
       Handler: index.handler
       Role: !GetAtt ScraperLambdaRole.Arn
@@ -349,7 +508,6 @@ Resources:
           CHUNK_TABLE: !Ref ChunkTable
           MAX_CHUNK_BYTES: !Ref MaxChunkBytes
           CHUNK_TTL_HOURS: !Ref ChunkTTLHours
-          STAGE: !Ref Stage
       Code:
         ZipFile: |
           """
@@ -835,7 +993,6 @@ Resources:
   DownlinkLambda:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub butterfi-downlink-${Stage}
       Runtime: python3.12
       Handler: index.handler
       Role: !GetAtt DownlinkLambdaRole.Arn
@@ -844,7 +1001,6 @@ Resources:
       Environment:
         Variables:
           CHUNK_TABLE: !Ref ChunkTable
-          STAGE: !Ref Stage
       Code:
         ZipFile: |
           """
@@ -931,18 +1087,22 @@ Resources:
   # IoT Core - Sidewalk destination and rules
   # ---------------------------------------------------------------
   SidewalkDestination:
-    Type: AWS::IoTWireless::Destination
+    Type: Custom::IoTWirelessDestination
+    DependsOn:
+      - SidewalkUplinkRule
     Properties:
+      ServiceToken: !GetAtt DestinationManagerLambda.Arn
       Name: !Ref SidewalkDestinationName
-      Expression: ButterFiUplinkRule
+      Expression: !Ref SidewalkUplinkRule
       ExpressionType: RuleName
       RoleArn: !GetAtt SidewalkRuleRole.Arn
       Description: Routes ButterFi Sidewalk uplinks to processing Lambda
+      Region: !Ref AWS::Region
+      AccountId: !Ref AWS::AccountId
 
   SidewalkUplinkRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: ButterFiUplinkRule
       TopicRulePayload:
         Sql: "SELECT * FROM 'butterfi/uplink'"
         Actions:
@@ -958,7 +1118,6 @@ Resources:
   ResendRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: !Sub ButterFiResendRule
       TopicRulePayload:
         Sql: "SELECT * FROM 'butterfi/resend/+'"
         Actions:
@@ -980,25 +1139,24 @@ Resources:
   UplinkErrorLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /butterfi/uplink-errors-${Stage}
       RetentionInDays: 14
 
   UplinkLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/butterfi-uplink-${Stage}
+      LogGroupName: !Sub /aws/lambda/${UplinkLambda}
       RetentionInDays: 14
 
   ScraperLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/butterfi-scraper-${Stage}
+      LogGroupName: !Sub /aws/lambda/${ScraperLambda}
       RetentionInDays: 14
 
   DownlinkLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/butterfi-downlink-${Stage}
+      LogGroupName: !Sub /aws/lambda/${DownlinkLambda}
       RetentionInDays: 14
 
   # ---------------------------------------------------------------
@@ -1007,7 +1165,6 @@ Resources:
   DLQAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub butterfi-dlq-messages-${Stage}
       AlarmDescription: Messages in the dead letter queue indicate scrape failures
       Namespace: AWS/SQS
       MetricName: ApproximateNumberOfMessagesVisible
@@ -1024,7 +1181,6 @@ Resources:
   ScraperErrorAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub butterfi-scraper-errors-${Stage}
       AlarmDescription: Scraper Lambda invocation errors
       Namespace: AWS/Lambda
       MetricName: Errors
@@ -1065,10 +1221,9 @@ Outputs:
 
   DeployCommand:
     Description: Deploy with
-    Value: !Sub >
+    Value: >
       aws cloudformation deploy
       --template-file template.yaml
-      --stack-name butterfi-${Stage}
+      --stack-name butterfi
       --capabilities CAPABILITY_NAMED_IAM
-      --region us-east-1
-      --parameter-overrides Stage=${Stage}
+      --region <your-region>
