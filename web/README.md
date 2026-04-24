@@ -1,7 +1,11 @@
-# Web Console
+# Web Tools
 
-This is a static Chrome Web Serial client for the ButterFi USB framing protocol.
-It is packaged as a small installable PWA with an offline app shell.
+This directory now contains two browser-side tools:
+
+- `index.html`: the existing Chrome Web Serial console for the ButterFi USB framing protocol
+- `provision.html`: the XIAO provisioning and web-flash flow
+
+The console is packaged as a small installable PWA with an offline app shell.
 
 ## Serve Locally
 
@@ -11,13 +15,14 @@ Web Serial requires a secure context. The simplest local option is localhost:
 python3 -m http.server 4173 --directory web
 ```
 
-Then open:
+Then open either:
 
 ```text
 http://localhost:4173
+http://localhost:4173/provision.html
 ```
 
-## What It Does
+## Runtime Console
 
 - connects to the ButterFi USB CDC ACM serial port
 - sends host query, status, cancel, and resend frames
@@ -26,6 +31,14 @@ http://localhost:4173
 - shows device status, transfer progress, and a session log
 - registers a service worker to cache the app shell for offline launch
 - exposes the Chromium install prompt when the browser decides the app is installable
+
+The runtime console still assumes the binary ButterFi USB framing protocol from
+[docs/shared-protocol.md](../docs/shared-protocol.md).
+
+## Provisioning
+
+`provision.html` is the XIAO setup flow. It is oriented around the
+UF2 bootloader flow and a per-device config payload.
 
 ## Installability Notes
 

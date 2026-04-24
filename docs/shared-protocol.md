@@ -1,7 +1,7 @@
 # ButterFi Shared Protocol
 
 This document is the implementation contract between the cloud stack, the
-RAK4630 firmware, and the Chrome Web Serial app.
+active ButterFi firmware target, and the Chrome Web Serial app.
 
 ## Milestone One Scope
 

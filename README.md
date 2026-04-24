@@ -1,7 +1,8 @@
 # ButterFi
 
-Serverless backend for ButterFi — a USB dongle that gives Chromebooks internet-like
-access over Amazon Sidewalk for students without home connectivity.
+ButterFi is a Sidewalk-to-web bridge for constrained student devices. This repo
+now centers on the Seeed XIAO nRF52840 firmware track, the browser tools around
+it, and the AWS backend that serves chunked text responses over Amazon Sidewalk.
 
 ## Architecture
 
@@ -29,14 +30,23 @@ Chromebook ←WebSerial→ ButterFi Dongle ←Sidewalk→ Neighbor's Echo ←Int
                         └─────────────────────────────────────────┘
 ```
 
-## Message Protocol
+## Current Tracks
 
-The system has two related protocols:
+- Active firmware target: Seeed XIAO nRF52840 in [firmware/xiao_nrf52840/](firmware/xiao_nrf52840)
+- Browser console for the runtime device protocol: [web/](web)
+- Browser provisioning and web-flash prototype: [web/provision.html](web/provision.html)
+- Cloud stack: [template.yaml](template.yaml)
 
-- Sidewalk frames between the device and AWS
-- USB serial frames between Chrome and the device
+## Protocol Contract
 
-The authoritative shared contract for both is in [docs/shared-protocol.md](/home/mrmemory/ButterFi/docs/shared-protocol.md).
+The authoritative contract between firmware, browser runtime, and cloud is in
+[docs/shared-protocol.md](docs/shared-protocol.md).
+
+The current cloud stack still expects:
+
+- Sidewalk uplinks: `0x01=query`, `0x02=resend`, `0x03=ack`
+- Sidewalk downlinks: `0x81=response chunk`
+- USB runtime transport: framed binary packets, not line-oriented JSON
 
 ### Uplink (device → cloud)
 
@@ -73,23 +83,19 @@ Message payloads:
 7. Device receives chunk 0, forwards it to the browser, and requests more via type=0x02 with the next needed chunk index
 8. Downlink Lambda reads from DynamoDB and sends next batch of chunks
 
-## Implementation Tracks
-
-- Firmware: RAK4630 Sidewalk client plus USB CDC ACM bridge
-- Web app: Chrome-only ButterFi page using the Web Serial API
-- Shared protocol: versioned binary frame contract for both workstreams
-
-The initial firmware scaffold, adapter stubs, shim layer, and RAK port mapping are in [firmware/rak4630/README.md](/home/mrmemory/ButterFi/firmware/rak4630/README.md).
-
 ## Firmware Build
 
-The portable rebuild flow for the ButterFi-integrated RAK4631 firmware is in [docs/firmware-build.md](/home/mrmemory/ButterFi/docs/firmware-build.md).
+The XIAO firmware build flow is documented in
+[docs/xiao-build.md](docs/xiao-build.md).
 
-Use the checked-in scripts in `scripts/` to bootstrap the vendor west workspace, apply vendor patches, and build without hard-coding any machine-specific paths. If you are not already inside an nRF Connect SDK shell, point `NCS_ENV_JSON` at your local toolchain manager `environment.json` file before running the script.
+The checked-in helper script is [scripts/build-xiao.sh](scripts/build-xiao.sh). If you are not already inside an nRF Connect SDK shell, point `NCS_ENV_JSON` at your local toolchain manager `environment.json` file before running it.
 
-## Browser App
+## Browser Tools
 
-The Chrome Web Serial client lives in [web/README.md](/home/mrmemory/ButterFi/web/README.md). It is a static installable PWA with no build step: serve the `web/` directory on localhost and open it in a Chromium-based browser.
+The browser-side tools live in [web/README.md](web/README.md). There are currently two entry points:
+
+- [web/index.html](web/index.html): runtime serial console for the binary ButterFi protocol
+- [web/provision.html](web/provision.html): XIAO provisioning and web-flash prototype
 
 ## Deploy
 
@@ -100,8 +106,7 @@ aws cloudformation deploy \
   --template-file template.yaml \
   --stack-name butterfi-dev \
   --capabilities CAPABILITY_NAMED_IAM \
-  --region us-east-1 \
-  --parameter-overrides Stage=dev
+  --region us-east-1
 ```
 
 ## Parameters
@@ -109,10 +114,9 @@ aws cloudformation deploy \
 | Parameter              | Default              | Description                                  |
 |------------------------|----------------------|----------------------------------------------|
 | SidewalkDestinationName| ButterFiDestination  | IoT Core Sidewalk destination name           |
-| MaxChunkBytes          | 240                  | Max bytes per downlink chunk (FSK=250 max)   |
+| MaxChunkBytes          | 240                  | Max bytes per downlink chunk                 |
 | ScraperTimeoutSeconds  | 30                   | Scraper Lambda timeout                       |
 | ChunkTTLHours          | 24                   | Hours before DynamoDB TTL cleans up chunks   |
-| Stage                  | dev                  | Deployment stage (dev/staging/prod)          |
 
 ## Scaling Notes
 

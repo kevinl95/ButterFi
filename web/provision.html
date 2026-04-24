@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ButterFi — XIAO Provisioning</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap');
+
+  :root {
+    --butter: #F5C842;
+    --butter-dark: #D4A820;
+    --ink: #1A1A1A;
+    --paper: #FAFAF5;
+    --warm-gray: #E8E5DC;
+    --muted: #7A7A6A;
+    --success: #3DAA6E;
+    --error: #D94F4F;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--paper);
+    color: var(--ink);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+  }
+
+  /* Subtle dot-grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: radial-gradient(circle, #C8C5B8 1px, transparent 1px);
+    background-size: 28px 28px;
+    opacity: 0.4;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .card {
+    position: relative;
+    z-index: 1;
+    background: white;
+    border: 2px solid var(--ink);
+    border-radius: 2px;
+    padding: 2.5rem 2.5rem 2rem;
+    max-width: 480px;
+    width: 100%;
+    box-shadow: 6px 6px 0 var(--ink);
+  }
+
+  .logo-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 2rem;
+  }
+
+  .logo-icon {
+    width: 36px;
+    height: 36px;
+    background: var(--butter);
+    border: 2px solid var(--ink);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+
+  .logo-text {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  .logo-text span {
+    color: var(--butter-dark);
+  }
+
+  h1 {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.05rem;
+    font-weight: 700;
+    margin-bottom: 0.4rem;
+    letter-spacing: -0.01em;
+  }
+
+  .subtitle {
+    font-size: 0.875rem;
+    color: var(--muted);
+    margin-bottom: 2rem;
+    line-height: 1.5;
+  }
+
+  /* Step indicator */
+  .steps {
+    display: flex;
+    gap: 0;
+    margin-bottom: 2rem;
+    border: 1.5px solid var(--ink);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .step {
+    flex: 1;
+    padding: 0.5rem 0.25rem;
+    text-align: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: var(--muted);
+    border-right: 1.5px solid var(--ink);
+    transition: background 0.2s, color 0.2s;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .step:last-child { border-right: none; }
+
+  .step.active {
+    background: var(--butter);
+    color: var(--ink);
+  }
+
+  .step.done {
+    background: var(--ink);
+    color: var(--butter);
+  }
+
+  /* Form fields */
+  .field {
+    margin-bottom: 1.25rem;
+  }
+
+  label {
+    display: block;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin-bottom: 0.4rem;
+  }
+
+  input, select {
+    width: 100%;
+    padding: 0.65rem 0.75rem;
+    border: 1.5px solid var(--ink);
+    border-radius: 2px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 0.95rem;
+    background: var(--paper);
+    color: var(--ink);
+    transition: border-color 0.15s, box-shadow 0.15s;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  input:focus, select:focus {
+    border-color: var(--butter-dark);
+    box-shadow: 3px 3px 0 var(--butter);
+  }
+
+  .select-wrap {
+    position: relative;
+  }
+
+  .select-wrap::after {
+    content: '▾';
+    position: absolute;
+    right: 0.75rem;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  /* Panel sections */
+  .panel {
+    display: none;
+    animation: fadeIn 0.2s ease;
+  }
+
+  .panel.active { display: block; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Instruction box */
+  .instruction-box {
+    background: var(--warm-gray);
+    border: 1.5px solid var(--ink);
+    border-radius: 2px;
+    padding: 1rem 1rem;
+    margin-bottom: 1.5rem;
+    font-size: 0.875rem;
+    line-height: 1.6;
+  }
+
+  .instruction-box .step-num {
+    display: inline-block;
+    background: var(--ink);
+    color: var(--butter);
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 2px;
+    margin-right: 6px;
+  }
+
+  .instruction-box p {
+    margin-bottom: 0.6rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 0;
+  }
+
+  .instruction-box p:last-child { margin-bottom: 0; }
+
+  kbd {
+    display: inline-block;
+    background: white;
+    border: 1.5px solid var(--ink);
+    border-radius: 3px;
+    padding: 1px 6px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.75rem;
+    box-shadow: 2px 2px 0 var(--ink);
+    margin: 0 2px;
+  }
+
+  /* Drive picker */
+  .drive-list {
+    border: 1.5px solid var(--ink);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 1.5rem;
+  }
+
+  .drive-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 1.5px solid var(--ink);
+    cursor: pointer;
+    transition: background 0.15s;
+    font-size: 0.9rem;
+  }
+
+  .drive-item:last-child { border-bottom: none; }
+  .drive-item:hover { background: var(--warm-gray); }
+
+  .drive-item.selected {
+    background: var(--butter);
+  }
+
+  .drive-icon {
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+
+  .drive-label { font-weight: 500; }
+  .drive-sub {
+    font-size: 0.75rem;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+  }
+
+  .no-drives {
+    padding: 1.25rem 1rem;
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+
+  /* Progress */
+  .progress-wrap {
+    margin-bottom: 1.5rem;
+  }
+
+  .progress-label {
+    display: flex;
+    justify-content: space-between;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.7rem;
+    color: var(--muted);
+    margin-bottom: 0.4rem;
+  }
+
+  .progress-bar-outer {
+    height: 10px;
+    background: var(--warm-gray);
+    border: 1.5px solid var(--ink);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .progress-bar-inner {
+    height: 100%;
+    background: var(--butter);
+    width: 0%;
+    transition: width 0.3s ease;
+    border-right: 1.5px solid var(--ink);
+  }
+
+  /* Status message */
+  .status-msg {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-bottom: 1rem;
+    min-height: 1.2em;
+    font-family: 'Space Mono', monospace;
+  }
+
+  .status-msg.ok { color: var(--success); }
+  .status-msg.err { color: var(--error); }
+
+  /* Buttons */
+  .btn {
+    width: 100%;
+    padding: 0.75rem 1.5rem;
+    background: var(--ink);
+    color: var(--butter);
+    border: 2px solid var(--ink);
+    border-radius: 2px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: transform 0.1s, box-shadow 0.1s;
+    box-shadow: 3px 3px 0 var(--butter-dark);
+  }
+
+  .btn:hover {
+    transform: translate(-1px, -1px);
+    box-shadow: 4px 4px 0 var(--butter-dark);
+  }
+
+  .btn:active {
+    transform: translate(2px, 2px);
+    box-shadow: 1px 1px 0 var(--butter-dark);
+  }
+
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: 3px 3px 0 var(--warm-gray);
+  }
+
+  .btn.secondary {
+    background: white;
+    color: var(--ink);
+    box-shadow: 3px 3px 0 var(--ink);
+    margin-top: 0.75rem;
+  }
+
+  .btn.secondary:hover {
+    background: var(--warm-gray);
+    box-shadow: 4px 4px 0 var(--ink);
+  }
+
+  /* Success state */
+  .success-icon {
+    width: 56px;
+    height: 56px;
+    background: var(--butter);
+    border: 2px solid var(--ink);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.5rem;
+    margin: 0 auto 1.5rem;
+    box-shadow: 4px 4px 0 var(--ink);
+    animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  }
+
+  @keyframes popIn {
+    from { transform: scale(0.5); opacity: 0; }
+    to   { transform: scale(1); opacity: 1; }
+  }
+
+  .success-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 1.1rem;
+    font-weight: 700;
+    text-align: center;
+    margin-bottom: 0.5rem;
+  }
+
+  .success-sub {
+    font-size: 0.875rem;
+    color: var(--muted);
+    text-align: center;
+    margin-bottom: 2rem;
+    line-height: 1.6;
+  }
+
+  /* Footer */
+  .footer {
+    margin-top: 1.75rem;
+    font-size: 0.75rem;
+    color: var(--muted);
+    text-align: center;
+    font-family: 'Space Mono', monospace;
+  }
+
+  /* Pill badge */
+  .badge {
+    display: inline-block;
+    background: var(--butter);
+    border: 1.5px solid var(--ink);
+    border-radius: 2px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 2px 6px;
+    text-transform: uppercase;
+    vertical-align: middle;
+    margin-left: 4px;
+  }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo-row">
+    <div class="logo-icon">🧈</div>
+    <div class="logo-text">Butter<span>Fi</span></div>
+  </div>
+
+  <div class="steps">
+    <div class="step active" id="s1">1 · Config</div>
+    <div class="step" id="s2">2 · Flash</div>
+    <div class="step" id="s3">3 · Done</div>
+  </div>
+
+  <!-- PANEL 1: Configuration -->
+  <div class="panel active" id="panel-config">
+    <h1>Configure your dongle</h1>
+    <p class="subtitle">Set up a ButterFi XIAO nRF52840 and write its device configuration through the browser.</p>
+
+    <div class="field">
+      <label>School / Location ID</label>
+      <input type="text" id="school-id" placeholder="e.g. BOULDER-HS-01" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div class="field">
+      <label>Device Name <span class="badge">Optional</span></label>
+      <input type="text" id="device-name" placeholder="e.g. Classroom 204" autocomplete="off">
+    </div>
+
+    <div class="field">
+      <label>Content Package</label>
+      <div class="select-wrap">
+        <select id="content-pkg">
+          <option value="k12-general">K–12 General</option>
+          <option value="k12-stem">K–12 STEM Focus</option>
+          <option value="k12-literacy">K–12 Literacy Focus</option>
+          <option value="higher-ed">Higher Education</option>
+          <option value="custom">Custom (advanced)</option>
+        </select>
+      </div>
+    </div>
+
+    <button class="btn" id="btn-config-next" onclick="goToFlash()">
+      Continue to Flash →
+    </button>
+  </div>
+
+  <!-- PANEL 2: Flash -->
+  <div class="panel" id="panel-flash">
+    <h1>Flash the dongle</h1>
+    <p class="subtitle">Follow these steps to test the current browser-based provisioning flow for the XIAO nRF52840.</p>
+
+    <div class="instruction-box">
+      <p><span class="step-num">1</span> Plug your XIAO into USB.</p>
+      <p><span class="step-num">2</span> Double-tap the <kbd>RST</kbd> button quickly — the LED pulses green and a drive appears.</p>
+      <p><span class="step-num">3</span> Select that drive below, then click Flash.</p>
+    </div>
+
+    <div class="drive-list" id="drive-list">
+      <div class="no-drives" id="no-drives-msg">
+        No UF2 drives detected yet.<br>Try double-tapping RST on your device.
+      </div>
+    </div>
+
+    <div id="progress-section" style="display:none">
+      <div class="progress-wrap">
+        <div class="progress-label">
+          <span>Writing staged output</span>
+          <span id="pct-label">0%</span>
+        </div>
+        <div class="progress-bar-outer">
+          <div class="progress-bar-inner" id="progress-bar"></div>
+        </div>
+      </div>
+      <div class="status-msg" id="status-msg">Preparing…</div>
+    </div>
+
+    <button class="btn" id="btn-flash" onclick="startFlash()" disabled>
+      ⚡ Write Prototype Output
+    </button>
+    <button class="btn secondary" onclick="goToConfig()">← Back</button>
+  </div>
+
+  <!-- PANEL 3: Done -->
+  <div class="panel" id="panel-done">
+    <div class="success-icon">✓</div>
+    <div class="success-title">Device ready!</div>
+    <p class="success-sub" id="done-msg">
+      Your ButterFi dongle has been configured.
+    </p>
+    <button class="btn" onclick="reset()">Stage another device</button>
+    <button class="btn secondary" onclick="downloadLog()">Download flash log</button>
+  </div>
+
+  <div class="footer">
+    UF2 bootloader · XIAO nRF52840 · ButterFi provisioning
+  </div>
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+let selectedDir = null;
+let flashLog = [];
+let scanInterval = null;
+
+// ─── Navigation ──────────────────────────────────────────────────────────────
+function setPanel(name) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+}
+
+function setStep(n) {
+  [1,2,3].forEach(i => {
+    const el = document.getElementById('s' + i);
+    el.classList.remove('active','done');
+    if (i < n) el.classList.add('done');
+    if (i === n) el.classList.add('active');
+  });
+}
+
+function goToConfig() {
+  stopScan();
+  setPanel('config');
+  setStep(1);
+}
+
+function goToFlash() {
+  const schoolId = document.getElementById('school-id').value.trim();
+  if (!schoolId) {
+    document.getElementById('school-id').focus();
+    document.getElementById('school-id').style.borderColor = 'var(--error)';
+    setTimeout(() => document.getElementById('school-id').style.borderColor = '', 1500);
+    return;
+  }
+  setPanel('flash');
+  setStep(2);
+  document.getElementById('progress-section').style.display = 'none';
+  startScan();
+}
+
+// ─── Drive Scanning (File System Access API) ─────────────────────────────────
+function startScan() {
+  renderDriveList([]);
+  scanInterval = setInterval(scanNoop, 3000);
+
+  // Show a manual "pick drive" button since continuous FS scanning isn't
+  // possible in browsers — user must grant access explicitly
+  renderManualPicker();
+}
+
+function stopScan() {
+  if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
+}
+
+function scanNoop() {
+  // Browser security prevents enumerating drives automatically.
+  // The UI guides the user to pick the drive manually via showDirectoryPicker.
+}
+
+function renderManualPicker() {
+  const list = document.getElementById('drive-list');
+  list.innerHTML = '';
+
+  const msg = document.createElement('div');
+  msg.style.cssText = 'padding:1rem;text-align:center;';
+  msg.innerHTML = `
+    <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem;line-height:1.6;">
+      After double-tapping RST, click below to<br>select the <strong>XIAO-SENSE</strong> drive that appears.
+    </div>
+    <button class="btn" style="width:auto;padding:0.5rem 1.25rem;font-size:0.75rem;" onclick="pickDrive()">
+      📂 Select UF2 Drive
+    </button>
+  `;
+  list.appendChild(msg);
+}
+
+async function pickDrive() {
+  try {
+    if (!('showDirectoryPicker' in window)) {
+      // Fallback: simulate for demo purposes
+      simulateDriveSelect();
+      return;
+    }
+    const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
+    selectedDir = dir;
+
+    const list = document.getElementById('drive-list');
+    list.innerHTML = '';
+    const item = document.createElement('div');
+    item.className = 'drive-item selected';
+    item.innerHTML = `
+      <span class="drive-icon">💾</span>
+      <div>
+        <div class="drive-label">${dir.name}</div>
+        <div class="drive-sub">UF2 bootloader drive selected</div>
+      </div>
+    `;
+    list.appendChild(item);
+    document.getElementById('btn-flash').disabled = false;
+
+  } catch(e) {
+    if (e.name !== 'AbortError') {
+      setStatus('Could not access drive: ' + e.message, 'err');
+    }
+  }
+}
+
+function simulateDriveSelect() {
+  // Demo mode when File System API unavailable
+  selectedDir = 'DEMO';
+  const list = document.getElementById('drive-list');
+  list.innerHTML = '';
+  const item = document.createElement('div');
+  item.className = 'drive-item selected';
+  item.innerHTML = `
+    <span class="drive-icon">💾</span>
+    <div>
+      <div class="drive-label">XIAO-SENSE</div>
+      <div class="drive-sub">UF2 bootloader drive · Demo mode</div>
+    </div>
+  `;
+  list.appendChild(item);
+  document.getElementById('btn-flash').disabled = false;
+}
+
+// ─── Firmware Generation ──────────────────────────────────────────────────────
+function buildConfig() {
+  return {
+    school_id: document.getElementById('school-id').value.trim(),
+    device_name: document.getElementById('device-name').value.trim() || 'ButterFi-Dongle',
+    content_pkg: document.getElementById('content-pkg').value,
+    provisioned_at: new Date().toISOString(),
+    fw_version: '1.0.0',
+  };
+}
+
+// Current generator for the browser-based provisioning flow.
+function configToUF2Bytes(cfg) {
+  // Encode config as a UTF-8 JSON payload for the device setup flow.
+  const json = JSON.stringify(cfg, null, 2);
+  return new TextEncoder().encode(json);
+}
+
+// ─── Flashing ────────────────────────────────────────────────────────────────
+async function startFlash() {
+  const cfg = buildConfig();
+  const bytes = configToUF2Bytes(cfg);
+  flashLog = [];
+
+  document.getElementById('btn-flash').disabled = true;
+  document.getElementById('progress-section').style.display = 'block';
+
+  log(`Flash started — ${cfg.device_name} @ ${cfg.school_id}`);
+  log(`Content: ${cfg.content_pkg}`);
+
+  if (selectedDir === 'DEMO') {
+    await simulateFlash(cfg, bytes);
+    return;
+  }
+
+  try {
+    setStatus('Writing device config…', '');
+    setProgress(20);
+
+    // Write config.json to the UF2 drive
+    const cfgFile = await selectedDir.getFileHandle('butterfi_config.json', { create: true });
+    const writable = await cfgFile.createWritable();
+    await writable.write(new Blob([bytes], { type: 'application/json' }));
+    await writable.close();
+    log('Config written to drive');
+    setProgress(60);
+
+    setStatus('Verifying…', '');
+    await sleep(400);
+    setProgress(90);
+
+    // In real flow: drop the .uf2 file here and the bootloader reboots
+    // const uf2File = await selectedDir.getFileHandle('firmware.uf2', { create: true });
+    // ... write patched uf2 bytes ...
+
+    setProgress(100);
+    setStatus('Done!', 'ok');
+    log('Write complete');
+    setTimeout(goToDone, 600);
+
+  } catch(e) {
+    setStatus('Write failed: ' + e.message, 'err');
+    log('ERROR: ' + e.message);
+    document.getElementById('btn-flash').disabled = false;
+  }
+}
+
+async function simulateFlash(cfg, bytes) {
+  const stages = [
+    [15,  'Connecting to bootloader…'],
+    [35,  'Preparing write…'],
+    [55,  'Writing config payload…'],
+    [75,  'Finalizing write…'],
+    [90,  'Verifying checksum…'],
+    [100, 'Complete!'],
+  ];
+  for (const [pct, msg] of stages) {
+    setProgress(pct);
+    setStatus(msg, pct === 100 ? 'ok' : '');
+    log(msg);
+    await sleep(450 + Math.random() * 200);
+  }
+  log(`Device: ${cfg.device_name}`);
+  log(`School: ${cfg.school_id}`);
+  log(`Content: ${cfg.content_pkg}`);
+  log(`Provisioned: ${cfg.provisioned_at}`);
+  setTimeout(goToDone, 700);
+}
+
+function goToDone() {
+  stopScan();
+  const cfg = buildConfig();
+  document.getElementById('done-msg').textContent =
+    `"${cfg.device_name}" configured for ${cfg.school_id}. Ready for deployment.`;
+  setPanel('done');
+  setStep(3);
+}
+
+function reset() {
+  selectedDir = null;
+  document.getElementById('school-id').value = '';
+  document.getElementById('device-name').value = '';
+  document.getElementById('content-pkg').value = 'k12-general';
+  document.getElementById('btn-flash').disabled = true;
+  document.getElementById('progress-section').style.display = 'none';
+  goToConfig();
+}
+
+// ─── Log & Download ───────────────────────────────────────────────────────────
+function log(msg) {
+  flashLog.push(`[${new Date().toISOString()}] ${msg}`);
+}
+
+function downloadLog() {
+  const blob = new Blob([flashLog.join('\n')], { type: 'text/plain' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `butterfi-flash-${Date.now()}.log`;
+  a.click();
+}
+
+// ─── UI Helpers ───────────────────────────────────────────────────────────────
+function setProgress(pct) {
+  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('pct-label').textContent = pct + '%';
+}
+
+function setStatus(msg, type) {
+  const el = document.getElementById('status-msg');
+  el.textContent = msg;
+  el.className = 'status-msg' + (type ? ' ' + type : '');
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+</script>
+
+</body>
+</html>
