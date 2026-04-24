@@ -1,0 +1,19 @@
+softdevice_reserved:
+  address: 0x00
+  size: 0x27000
+
+app:
+  address: 0x27000
+  size: 0xC4000
+
+mfg_storage:
+  address: 0xEB000
+  size: 0x1000
+
+settings_storage:
+  address: 0xEC000
+  size: 0x8000
+
+uf2_partition:
+  address: 0xF4000
+  size: 0xC000

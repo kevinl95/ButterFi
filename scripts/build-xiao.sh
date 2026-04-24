@@ -10,6 +10,7 @@ APP_DIR="${BUTTERFI_APP:-$REPO_ROOT/firmware/xiao_nrf52840}"
 BOARD="${BUTTERFI_BOARD:-xiao_ble}"
 BUILD_DIR="${BUTTERFI_BUILD_DIR:-$APP_DIR/build}"
 ENV_JSON="${NCS_ENV_JSON:-}"
+ZEPHYR_BASE_DIR="${ZEPHYR_BASE:-}"
 
 usage() {
     cat <<EOF
@@ -25,6 +26,7 @@ Environment overrides:
   NCS_ENV_JSON         Path to toolchain environment.json
   NCS_TOOLCHAIN_DIR    Toolchain root containing environment.json
   SIDEWALK_BASE        Path to the local sdk-sidewalk checkout
+    ZEPHYR_BASE          Path to the Zephyr tree inside your NCS workspace
   BUTTERFI_APP         App path (default: REPO_ROOT/firmware/xiao_nrf52840)
   BUTTERFI_BOARD       Zephyr board name (default: xiao_ble)
   BUTTERFI_BUILD_DIR   Build output directory (default: APP_DIR/build)
@@ -40,6 +42,8 @@ run_cmd() {
 }
 
 require_paths() {
+    local expected_sidewalk
+
     if [[ ! -d "$APP_DIR" ]]; then
         echo "App directory not found: $APP_DIR" >&2
         exit 1
@@ -49,13 +53,30 @@ require_paths() {
         echo "SIDEWALK_BASE must point at a local sdk-sidewalk checkout" >&2
         exit 1
     fi
+
+    if [[ -z "$ZEPHYR_BASE_DIR" ]]; then
+        echo "ZEPHYR_BASE must point at the Zephyr tree inside your NCS workspace" >&2
+        exit 1
+    fi
+
+    if [[ ! -d "$ZEPHYR_BASE_DIR" ]]; then
+        echo "ZEPHYR_BASE directory not found: $ZEPHYR_BASE_DIR" >&2
+        exit 1
+    fi
+
+    expected_sidewalk="$(dirname "$ZEPHYR_BASE_DIR")/sidewalk"
+    if [[ ! -e "$expected_sidewalk" ]]; then
+        echo "Sidewalk SDK must also be available at: $expected_sidewalk" >&2
+        echo "Clone it there or create a symlink to: $SIDEWALK_BASE" >&2
+        exit 1
+    fi
 }
 
 configure_build() {
     require_paths
     (
         cd "$REPO_ROOT"
-        run_cmd west build -p -b "$BOARD" "$APP_DIR"
+        run_cmd west -z "$ZEPHYR_BASE_DIR" build -d "$BUILD_DIR" -p -b "$BOARD" "$APP_DIR"
     )
 }
 
