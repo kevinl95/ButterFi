@@ -82,6 +82,7 @@ reads and resynchronize without relying on line-oriented text parsing.
 | `0x03` | Host cancel request | Empty |
 | `0x04` | Host ping | Optional opaque payload |
 | `0x05` | Host status request | Empty |
+| `0x06` | Host config save | UTF-8 JSON object containing `school_id`, `device_name`, and `content_pkg` |
 
 ### Device to Browser Frame Types
 
@@ -93,12 +94,29 @@ reads and resynchronize without relying on line-oriented text parsing.
 | `0x84` | Transfer complete | Empty |
 | `0x85` | Transfer error | Error code + UTF-8 message |
 | `0x86` | Pong | Optional opaque payload |
+| `0x87` | Debug text | UTF-8 debug message |
+| `0x88` | Config saved | Optional UTF-8 success message |
+
+### Host Config Save Payload
+
+The browser provisioner sends a UTF-8 JSON object in frame type `0x06` after the
+UF2 flash completes and the runtime firmware has rebooted.
+
+```json
+{
+  "school_id": "BOULDER-HS-01",
+  "device_name": "Room 204 / Student 01",
+  "content_pkg": "k12-general"
+}
+```
+
+The firmware parses this object and persists the values into NVS.
 
 ### Device Status Payload
 
 | Byte | Field | Notes |
 |------|-------|-------|
-| 0 | Device state | `0=idle`, `1=serial-ready`, `2=sidewalk-starting`, `3=sidewalk-ready`, `4=busy`, `5=error` |
+| 0 | Device state | `0=idle`, `1=serial-ready`, `2=sidewalk-starting`, `3=sidewalk-ready`, `4=busy`, `5=error`, `6=sidewalk-not-registered` |
 | 1 | Link state | `0=unknown`, `1=ble`, `2=fsk`, `3=lora` |
 | 2 | Active request ID | `0` if none |
 
@@ -117,6 +135,7 @@ Error code registry:
 - `0x04`: cloud fetch failed
 - `0x05`: transfer timed out
 - `0x06`: protocol mismatch
+- `0x07`: config save failed
 
 ## Implementation Notes
 
@@ -128,3 +147,5 @@ Error code registry:
   flight.
 - If the browser disconnects and reconnects, the device should emit a status
   frame immediately after the serial session is re-established.
+- The browser provisioner uses frame `0x06` after flashing to persist the
+  classroom config into NVS over the runtime CDC ACM interface.

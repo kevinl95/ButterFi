@@ -11,6 +11,10 @@ BOARD="${BUTTERFI_BOARD:-xiao_ble}"
 BUILD_DIR="${BUTTERFI_BUILD_DIR:-$APP_DIR/build}"
 ENV_JSON="${NCS_ENV_JSON:-}"
 ZEPHYR_BASE_DIR="${ZEPHYR_BASE:-}"
+EXTRA_CONF_FILE="${BUTTERFI_EXTRA_CONF_FILE:-}"
+USB_CONTROL_DEBUG="${BUTTERFI_USB_CONTROL_DEBUG:-}"
+INCLUDE_SIDEWALK="${BUTTERFI_INCLUDE_SIDEWALK:-}"
+DISABLE_SIDEWALK_ASSERTS="${BUTTERFI_DISABLE_SIDEWALK_ASSERTS:-}"
 
 usage() {
     cat <<EOF
@@ -30,6 +34,10 @@ Environment overrides:
   BUTTERFI_APP         App path (default: REPO_ROOT/firmware/xiao_nrf52840)
   BUTTERFI_BOARD       Zephyr board name (default: xiao_ble)
   BUTTERFI_BUILD_DIR   Build output directory (default: APP_DIR/build)
+    BUTTERFI_EXTRA_CONF_FILE  Extra Kconfig fragment merged at configure time
+    BUTTERFI_USB_CONTROL_DEBUG  Override CMake option for USB control runtime
+    BUTTERFI_INCLUDE_SIDEWALK  Override CMake option for Sidewalk sources/module
+    BUTTERFI_DISABLE_SIDEWALK_ASSERTS  Override CMake option for Sidewalk PAL asserts
 EOF
 }
 
@@ -72,11 +80,51 @@ require_paths() {
     fi
 }
 
+resolve_optional_path() {
+    local value="$1"
+
+    if [[ -z "$value" ]]; then
+        return 0
+    fi
+
+    if [[ "$value" = /* ]]; then
+        printf '%s' "$value"
+    else
+        printf '%s' "$APP_DIR/$value"
+    fi
+}
+
 configure_build() {
+    local extra_conf_path=""
+    local cmake_args=()
+
     require_paths
+
+    extra_conf_path="$(resolve_optional_path "$EXTRA_CONF_FILE")"
+
+    if [[ -n "$extra_conf_path" ]]; then
+        cmake_args+=("-DEXTRA_CONF_FILE=$extra_conf_path")
+    fi
+
+    if [[ -n "$USB_CONTROL_DEBUG" ]]; then
+        cmake_args+=("-DBUTTERFI_USB_CONTROL_DEBUG:BOOL=$USB_CONTROL_DEBUG")
+    fi
+
+    if [[ -n "$INCLUDE_SIDEWALK" ]]; then
+        cmake_args+=("-DBUTTERFI_INCLUDE_SIDEWALK:BOOL=$INCLUDE_SIDEWALK")
+    fi
+
+    if [[ -n "$DISABLE_SIDEWALK_ASSERTS" ]]; then
+        cmake_args+=("-DBUTTERFI_DISABLE_SIDEWALK_ASSERTS:BOOL=$DISABLE_SIDEWALK_ASSERTS")
+    fi
+
     (
         cd "$REPO_ROOT"
-        run_cmd west -z "$ZEPHYR_BASE_DIR" build -d "$BUILD_DIR" -p -b "$BOARD" "$APP_DIR"
+        if [[ ${#cmake_args[@]} -gt 0 ]]; then
+            run_cmd west -z "$ZEPHYR_BASE_DIR" build -d "$BUILD_DIR" -p -b "$BOARD" "$APP_DIR" -- "${cmake_args[@]}"
+        else
+            run_cmd west -z "$ZEPHYR_BASE_DIR" build -d "$BUILD_DIR" -p -b "$BOARD" "$APP_DIR"
+        fi
     )
 }
 

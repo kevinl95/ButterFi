@@ -95,7 +95,7 @@ The checked-in helper script is [scripts/build-xiao.sh](scripts/build-xiao.sh). 
 The browser-side tools live in [web/README.md](web/README.md). There are currently two entry points:
 
 - [web/index.html](web/index.html): runtime serial console for the binary ButterFi protocol
-- [web/provision.html](web/provision.html): XIAO provisioning and web-flash prototype
+- [web/provision.html](web/provision.html): XIAO provisioning and web-flash prototype, now with classroom batch-package support and post-flash runtime config save over USB serial
 
 ## Deploy
 

@@ -32,4 +32,5 @@ dist/
 coverage/
 
 # Zephyr/NCS build outputs
-/firmware/xiao_nrf52840/build/
+/firmware/xiao_nrf52840/build*/
+artifacts/*

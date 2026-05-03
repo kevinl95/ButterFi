@@ -54,14 +54,20 @@ setup and stored configuration.
 ```bash
 cd /home/mrmemory/ButterFi
 
-# Option 1: already inside an nRF Connect SDK shell
-./scripts/build-xiao.sh configure
-
-# Option 2: use a Toolchain Manager environment file
+# Validated Sidewalk release runtime
 export NCS_ENV_JSON=/path/to/ncs/toolchains/<toolchain-id>/environment.json
+export ZEPHYR_BASE=/path/to/ncs/<version>/zephyr
 export SIDEWALK_BASE=$HOME/sidewalk
-./scripts/build-xiao.sh configure
-./scripts/build-xiao.sh build
+BUTTERFI_USB_CONTROL_DEBUG=OFF \
+BUTTERFI_INCLUDE_SIDEWALK=ON \
+BUTTERFI_EXTRA_CONF_FILE=prj.sidewalk.conf \
+./scripts/build-xiao.sh rebuild
+
+# Optional: USB-control Sidewalk debug runtime
+BUTTERFI_USB_CONTROL_DEBUG=ON \
+BUTTERFI_INCLUDE_SIDEWALK=ON \
+BUTTERFI_EXTRA_CONF_FILE=prj.sidewalk-debug.conf \
+./scripts/build-xiao.sh rebuild
 ```
 
 The helper build flow is documented in [docs/xiao-build.md](../../docs/xiao-build.md).

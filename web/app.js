@@ -25,6 +25,7 @@ const deviceStateLabels = {
     3: "Sidewalk ready",
     4: "Busy",
     5: "Error",
+    6: "Sidewalk not registered",
 };
 
 const linkStateLabels = {
@@ -512,6 +513,14 @@ async function connect() {
     state.port = await navigator.serial.requestPort();
     await state.port.open({ baudRate: 115200, bufferSize: 4096 });
 
+    if (typeof state.port.setSignals === "function") {
+        try {
+            await state.port.setSignals({ dataTerminalReady: true, requestToSend: true });
+        } catch (error) {
+            logEvent("system", `Unable to assert serial control lines: ${error.message}`);
+        }
+    }
+
     state.writer = state.port.writable.getWriter();
     state.reader = state.port.readable.getReader();
     state.connected = true;
@@ -529,6 +538,14 @@ async function connect() {
 async function disconnect() {
     if (!state.port) {
         return;
+    }
+
+    if (typeof state.port.setSignals === "function") {
+        try {
+            await state.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+        } catch (error) {
+            logEvent("system", `Unable to clear serial control lines: ${error.message}`);
+        }
     }
 
     if (state.reader) {

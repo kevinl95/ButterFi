@@ -15,6 +15,7 @@
 #ifndef BUTTERFI_CONTENT_H
 #define BUTTERFI_CONTENT_H
 
+#if BUTTERFI_INCLUDE_SIDEWALK
 #include <sid_api.h>
 
 /**
@@ -23,5 +24,6 @@
  */
 void butterfi_content_handle_msg(const struct sid_msg_desc *desc,
                                   const struct sid_msg *msg);
+#endif
 
 #endif /* BUTTERFI_CONTENT_H */

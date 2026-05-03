@@ -147,6 +147,30 @@ For a clean end-to-end rebuild:
 ./scripts/build-xiao.sh rebuild
 ```
 
+The plain commands above build the base USB runtime. The canonical Sidewalk
+profiles are:
+
+- release runtime: [firmware/xiao_nrf52840/prj.sidewalk.conf](../firmware/xiao_nrf52840/prj.sidewalk.conf)
+- USB control debug runtime: [firmware/xiao_nrf52840/prj.sidewalk-debug.conf](../firmware/xiao_nrf52840/prj.sidewalk-debug.conf)
+
+Build the validated non-debug Sidewalk runtime with:
+
+```bash
+BUTTERFI_USB_CONTROL_DEBUG=OFF \
+BUTTERFI_INCLUDE_SIDEWALK=ON \
+BUTTERFI_EXTRA_CONF_FILE=prj.sidewalk.conf \
+./scripts/build-xiao.sh rebuild
+```
+
+Build the Sidewalk USB-control debug runtime with:
+
+```bash
+BUTTERFI_USB_CONTROL_DEBUG=ON \
+BUTTERFI_INCLUDE_SIDEWALK=ON \
+BUTTERFI_EXTRA_CONF_FILE=prj.sidewalk-debug.conf \
+./scripts/build-xiao.sh rebuild
+```
+
 The exact helper implementation is in [scripts/build-xiao.sh](../scripts/build-xiao.sh).
 
 The helper defaults are:

@@ -16,16 +16,21 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/usb/usb_device.h>
 #include <zephyr/drivers/uart.h>
+#include <zephyr/data/json.h>
 #include <zephyr/fs/nvs.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/sys/reboot.h>
 
 #include <string.h>
 
+#if BUTTERFI_INCLUDE_SIDEWALK
+#include <pm_config.h>
+
 #include <sid_api.h>
 #include <sid_error.h>
 #include <sid_pal_common_ifc.h>
 #include <app_ble_config.h>
+#endif
 
 #include "butterfi_config.h"
 #include "butterfi_usb.h"
@@ -69,14 +74,8 @@ typedef enum {
 } sidewalk_state_t;
 
 static sidewalk_state_t sidewalk_state = SIDEWALK_STATE_INIT;
-static struct sid_handle *sid_handle   = NULL;
 
-#define BUTTERFI_SIDEWALK_MSG_QUERY 0x01
-#define BUTTERFI_SIDEWALK_MSG_RESEND 0x02
-#define BUTTERFI_SIDEWALK_MSG_ACK 0x03
-#define BUTTERFI_SIDEWALK_MSG_RESPONSE_CHUNK 0x81
 #define BUTTERFI_MAX_TRANSFER_CHUNKS 255
-#define BUTTERFI_SIDEWALK_UPLINK_MAX_PAYLOAD 512
 
 static bool usb_ready;
 static uint8_t active_request_id;
@@ -86,6 +85,32 @@ static uint8_t active_total_chunks;
 static size_t received_chunk_count;
 static uint8_t received_chunk_bitmap[(BUTTERFI_MAX_TRANSFER_CHUNKS + 7) / 8];
 static uint8_t current_link_state = BUTTERFI_USB_LINK_UNKNOWN;
+static volatile uint8_t host_frame_led_ticks;
+static volatile uint8_t usb_tx_ok_led_ticks;
+static volatile uint8_t usb_tx_err_led_ticks;
+static volatile uint8_t usb_rx_byte_led_ticks;
+static volatile uint8_t usb_rx_error_led_ticks;
+static struct butterfi_usb_diag_counters last_usb_diag_snapshot;
+static volatile uint8_t boot_fingerprint_ticks = 40;
+
+static void set_usb_diag_led(uint8_t *slot)
+{
+    host_frame_led_ticks = 0;
+    usb_tx_ok_led_ticks = 0;
+    usb_tx_err_led_ticks = 0;
+    usb_rx_byte_led_ticks = 0;
+    usb_rx_error_led_ticks = 0;
+    *slot = 1;
+}
+
+#if BUTTERFI_INCLUDE_SIDEWALK
+static struct sid_handle *sid_handle   = NULL;
+
+#define BUTTERFI_SIDEWALK_MSG_QUERY 0x01
+#define BUTTERFI_SIDEWALK_MSG_RESEND 0x02
+#define BUTTERFI_SIDEWALK_MSG_ACK 0x03
+#define BUTTERFI_SIDEWALK_MSG_RESPONSE_CHUNK 0x81
+#define BUTTERFI_SIDEWALK_UPLINK_MAX_PAYLOAD 512
 
 #define MAX_TIME_SYNC_INTERVALS 4
 static uint16_t default_sync_intervals_h[MAX_TIME_SYNC_INTERVALS] = { 2, 4, 8, 12 };
@@ -95,6 +120,16 @@ static struct sid_time_sync_config default_time_sync_config = {
 };
 
 K_SEM_DEFINE(sidewalk_event_sem, 0, 1);
+#endif
+
+static const char *sidewalk_unavailable_reason(void)
+{
+    if (sidewalk_state == SIDEWALK_STATE_NOT_REGISTERED) {
+        return "sidewalk not registered; missing credential or mobile onboarding";
+    }
+
+    return "sidewalk not ready";
+}
 
 static void refresh_usb_status(void)
 {
@@ -102,6 +137,8 @@ static void refresh_usb_status(void)
 
     if (sidewalk_state == SIDEWALK_STATE_ERROR) {
         device_state = BUTTERFI_USB_DEVICE_STATE_ERROR;
+    } else if (sidewalk_state == SIDEWALK_STATE_NOT_REGISTERED) {
+        device_state = BUTTERFI_USB_DEVICE_STATE_SIDEWALK_NOT_REGISTERED;
     } else if (request_in_flight) {
         device_state = BUTTERFI_USB_DEVICE_STATE_BUSY;
     } else if (sidewalk_state == SIDEWALK_STATE_READY) {
@@ -150,6 +187,7 @@ static bool mark_chunk_received(uint8_t chunk_idx)
     return !already_received;
 }
 
+#if BUTTERFI_INCLUDE_SIDEWALK
 static sid_error_t send_sidewalk_uplink(uint8_t msg_type,
                                         uint8_t request_id,
                                         const uint8_t *payload,
@@ -187,6 +225,96 @@ static sid_error_t send_sidewalk_uplink(uint8_t msg_type,
 
     return sid_put_msg(sid_handle, &msg, &desc);
 }
+#endif
+
+static void note_host_frame_seen(uint8_t frame_type, uint8_t request_id)
+{
+    set_usb_diag_led((uint8_t *)&host_frame_led_ticks);
+    LOG_INF("USB host frame: type=0x%02x id=%u", frame_type, request_id);
+}
+
+struct butterfi_host_config_json {
+    char school_id[BUTTERFI_SCHOOL_ID_MAX];
+    char device_name[BUTTERFI_DEVICE_NAME_MAX];
+    char content_pkg[BUTTERFI_CONTENT_PKG_MAX];
+};
+
+static const struct json_obj_descr butterfi_host_config_descr[] = {
+    JSON_OBJ_DESCR_PRIM(struct butterfi_host_config_json, school_id, JSON_TOK_STRING_BUF),
+    JSON_OBJ_DESCR_PRIM(struct butterfi_host_config_json, device_name, JSON_TOK_STRING_BUF),
+    JSON_OBJ_DESCR_PRIM(struct butterfi_host_config_json, content_pkg, JSON_TOK_STRING_BUF),
+};
+
+static int save_host_config_payload(const uint8_t *payload, uint16_t payload_len)
+{
+    char json_buffer[513];
+    struct butterfi_host_config_json host_cfg = { 0 };
+    butterfi_config_t cfg = { 0 };
+    int64_t decoded;
+
+    if (payload == NULL || payload_len == 0 || payload_len >= sizeof(json_buffer)) {
+        return -EMSGSIZE;
+    }
+
+    memcpy(json_buffer, payload, payload_len);
+    json_buffer[payload_len] = '\0';
+
+    decoded = json_obj_parse(json_buffer,
+                             payload_len,
+                             butterfi_host_config_descr,
+                             ARRAY_SIZE(butterfi_host_config_descr),
+                             &host_cfg);
+    if (decoded < 0) {
+        return (int)decoded;
+    }
+
+    if ((decoded & (BIT(0) | BIT(2))) != (BIT(0) | BIT(2))) {
+        return -EINVAL;
+    }
+
+    if (host_cfg.school_id[0] == '\0' || host_cfg.content_pkg[0] == '\0') {
+        return -EINVAL;
+    }
+
+    strncpy(cfg.school_id, host_cfg.school_id, sizeof(cfg.school_id) - 1);
+    strncpy(cfg.content_pkg, host_cfg.content_pkg, sizeof(cfg.content_pkg) - 1);
+
+    if (host_cfg.device_name[0] != '\0') {
+        strncpy(cfg.device_name, host_cfg.device_name, sizeof(cfg.device_name) - 1);
+    } else {
+        strncpy(cfg.device_name, "ButterFi-Dongle", sizeof(cfg.device_name) - 1);
+    }
+
+    return butterfi_config_save(&cfg);
+}
+
+static void note_usb_tx_result(int ret, const char *label)
+{
+    if (ret == 0) {
+        set_usb_diag_led((uint8_t *)&usb_tx_ok_led_ticks);
+        LOG_INF("USB TX ok: %s", label);
+    } else {
+        set_usb_diag_led((uint8_t *)&usb_tx_err_led_ticks);
+        LOG_WRN("USB TX failed (%d): %s", ret, label);
+    }
+}
+
+static void poll_usb_diag_counters(void)
+{
+    struct butterfi_usb_diag_counters diag;
+
+    butterfi_usb_get_diag_counters(&diag);
+
+    if (diag.rx_bytes != last_usb_diag_snapshot.rx_bytes) {
+        set_usb_diag_led((uint8_t *)&usb_rx_byte_led_ticks);
+    }
+
+    if (diag.rx_errors != last_usb_diag_snapshot.rx_errors) {
+        set_usb_diag_led((uint8_t *)&usb_rx_error_led_ticks);
+    }
+
+    last_usb_diag_snapshot = diag;
+}
 
 static void handle_host_frame(uint8_t frame_type,
                               uint8_t request_id,
@@ -194,20 +322,51 @@ static void handle_host_frame(uint8_t frame_type,
                               uint16_t payload_len,
                               void *context)
 {
+#if BUTTERFI_INCLUDE_SIDEWALK
     sid_error_t sid_err;
+#endif
 
     ARG_UNUSED(context);
 
+    note_host_frame_seen(frame_type, request_id);
+
     switch (frame_type) {
     case BUTTERFI_USB_FRAME_HOST_STATUS_REQUEST:
-        (void)butterfi_usb_send_status();
+        note_usb_tx_result(butterfi_usb_send_status(), "status");
         break;
 
+    case BUTTERFI_USB_FRAME_HOST_CONFIG_SAVE: {
+        int ret = save_host_config_payload(payload, payload_len);
+
+        if (ret < 0) {
+            uint8_t error_code = (ret == -EINVAL || ret == -EMSGSIZE)
+                ? BUTTERFI_USB_ERROR_INVALID_HOST_FRAME
+                : BUTTERFI_USB_ERROR_CONFIG_SAVE_FAILED;
+            const char *message = (ret == -EINVAL || ret == -EMSGSIZE)
+                ? "invalid config payload"
+                : "config save failed";
+
+            LOG_ERR("Config save failed: %d", ret);
+            (void)butterfi_usb_send_transfer_error(request_id, error_code, message);
+            break;
+        }
+
+        note_usb_tx_result(butterfi_usb_send_config_saved(request_id, "config saved"),
+                           "config-saved");
+        break;
+    }
+
     case BUTTERFI_USB_FRAME_HOST_PING:
-        (void)butterfi_usb_send_pong(request_id, payload, payload_len);
+        note_usb_tx_result(butterfi_usb_send_pong(request_id, payload, payload_len), "pong");
         break;
 
     case BUTTERFI_USB_FRAME_HOST_QUERY_SUBMIT:
+#if BUTTERFI_USB_CONTROL_DEBUG || !BUTTERFI_INCLUDE_SIDEWALK
+        (void)butterfi_usb_send_transfer_error(request_id,
+                                               BUTTERFI_USB_ERROR_SIDEWALK_UNAVAILABLE,
+                                               "usb control debug build");
+        break;
+#else
         if (payload_len == 0) {
             (void)butterfi_usb_send_transfer_error(request_id,
                                                    BUTTERFI_USB_ERROR_PROTOCOL_MISMATCH,
@@ -225,7 +384,7 @@ static void handle_host_frame(uint8_t frame_type,
         if (sidewalk_state != SIDEWALK_STATE_READY || sid_handle == NULL) {
             (void)butterfi_usb_send_transfer_error(request_id,
                                                    BUTTERFI_USB_ERROR_SIDEWALK_UNAVAILABLE,
-                                                   "sidewalk not ready");
+                                                   sidewalk_unavailable_reason());
             break;
         }
 
@@ -245,8 +404,15 @@ static void handle_host_frame(uint8_t frame_type,
         current_led_state = LED_STATE_SENDING;
         (void)butterfi_usb_send_uplink_accepted(request_id);
         break;
+#endif
 
     case BUTTERFI_USB_FRAME_HOST_RESEND_REQUEST:
+#if BUTTERFI_USB_CONTROL_DEBUG || !BUTTERFI_INCLUDE_SIDEWALK
+        (void)butterfi_usb_send_transfer_error(request_id,
+                                               BUTTERFI_USB_ERROR_SIDEWALK_UNAVAILABLE,
+                                               "usb control debug build");
+        break;
+#else
         if (payload_len != 1 || !request_in_flight || request_id != active_request_id) {
             (void)butterfi_usb_send_transfer_error(request_id,
                                                    BUTTERFI_USB_ERROR_PROTOCOL_MISMATCH,
@@ -257,7 +423,7 @@ static void handle_host_frame(uint8_t frame_type,
         if (sidewalk_state != SIDEWALK_STATE_READY || sid_handle == NULL) {
             (void)butterfi_usb_send_transfer_error(request_id,
                                                    BUTTERFI_USB_ERROR_SIDEWALK_UNAVAILABLE,
-                                                   "sidewalk not ready");
+                                                   sidewalk_unavailable_reason());
             break;
         }
 
@@ -275,6 +441,7 @@ static void handle_host_frame(uint8_t frame_type,
 
         (void)butterfi_usb_send_uplink_accepted(request_id);
         break;
+#endif
 
     case BUTTERFI_USB_FRAME_HOST_CANCEL_REQUEST:
         if (request_in_flight && request_id == active_request_id) {
@@ -298,6 +465,7 @@ static void handle_host_frame(uint8_t frame_type,
     }
 }
 
+#if BUTTERFI_INCLUDE_SIDEWALK
 /* ── Sidewalk event callbacks ───────────────────────────────────────────── */
 static void on_sidewalk_event(bool in_isr, void *context)
 {
@@ -396,8 +564,11 @@ static void on_send_error(sid_error_t error,
 
 static void on_status_changed(const struct sid_status *status, void *context)
 {
-    LOG_INF("Sidewalk status: state=%d, reg=%d",
-            status->state, status->detail.registration_status);
+    LOG_INF("Sidewalk status: state=%d, reg=%d, time=%d, link_mask=0x%08x",
+            status->state,
+            status->detail.registration_status,
+            status->detail.time_sync_status,
+            status->detail.link_status_mask);
 
     switch (status->state) {
     case SID_STATE_READY:
@@ -426,7 +597,7 @@ static void on_status_changed(const struct sid_status *status, void *context)
     if (status->detail.registration_status == SID_STATUS_NOT_REGISTERED) {
         sidewalk_state = SIDEWALK_STATE_NOT_REGISTERED;
         current_led_state = LED_STATE_UNPROVISIONED;
-        LOG_WRN("Device not registered — run provisioning tool");
+        LOG_WRN("Device not registered — missing Sidewalk credential or onboarding");
     }
 
     refresh_usb_status();
@@ -450,8 +621,34 @@ static struct sid_event_callbacks sidewalk_callbacks = {
     .on_factory_reset  = on_factory_reset,
 };
 
+static int sidewalk_platform_init_once(void)
+{
+    static bool platform_ready;
+    platform_parameters_t platform_parameters = {
+        .mfg_store_region = {
+            .addr_start = PM_MFG_STORAGE_ADDRESS,
+            .addr_end = PM_MFG_STORAGE_END_ADDRESS,
+        },
+    };
+    sid_error_t err;
+
+    if (platform_ready) {
+        return 0;
+    }
+
+    err = sid_platform_init(&platform_parameters);
+    if (err != SID_ERROR_NONE) {
+        LOG_ERR("sid_platform_init failed: %d", err);
+        return -EFAULT;
+    }
+
+    platform_ready = true;
+    return 0;
+}
+
 static int sidewalk_init(void)
 {
+    int ret;
     struct sid_end_device_characteristics dev_ch = {
         .type = SID_END_DEVICE_TYPE_STATIC,
         .power_type = SID_END_DEVICE_POWERED_BY_BATTERY_AND_LINE_POWER,
@@ -468,6 +665,11 @@ static int sidewalk_init(void)
         .time_sync_config = &default_time_sync_config,
     };
 
+    ret = sidewalk_platform_init_once();
+    if (ret < 0) {
+        return ret;
+    }
+
     sid_error_t err = sid_init(&config, &sid_handle);
     if (err != SID_ERROR_NONE) {
         LOG_ERR("sid_init failed: %d", err);
@@ -483,6 +685,7 @@ static int sidewalk_init(void)
     LOG_INF("Sidewalk stack started");
     return 0;
 }
+#endif
 
 /* ── LED blink thread ───────────────────────────────────────────────────── */
 #define LED_STACK_SIZE 512
@@ -498,6 +701,44 @@ static void led_thread_fn(void *a, void *b, void *c)
 
     while (1) {
         tick++;
+
+        if (boot_fingerprint_ticks > 0U) {
+            boot_fingerprint_ticks--;
+            led_set(1, 1, 1);
+            k_msleep(250);
+            continue;
+        }
+
+        if (usb_rx_error_led_ticks > 0U) {
+            led_set(1, 1, 0);
+            k_msleep(250);
+            continue;
+        }
+
+        if (usb_rx_byte_led_ticks > 0U) {
+            led_set(0, 0, 1);
+            k_msleep(250);
+            continue;
+        }
+
+        if (usb_tx_err_led_ticks > 0U) {
+            led_set(1, 0, 1);
+            k_msleep(250);
+            continue;
+        }
+
+        if (usb_tx_ok_led_ticks > 0U) {
+            led_set(1, 1, 1);
+            k_msleep(250);
+            continue;
+        }
+
+        if (host_frame_led_ticks > 0U) {
+            led_set(0, 1, 1);
+            k_msleep(250);
+            continue;
+        }
+
         switch (current_led_state) {
         case LED_STATE_BOOT:
             led_set(0, 0, tick % 4 < 2);         /* blue pulse        */
@@ -526,6 +767,49 @@ K_THREAD_DEFINE(led_tid, LED_STACK_SIZE,
                 led_thread_fn, NULL, NULL, NULL,
                 LED_PRIORITY, 0, 0);
 
+/* ── USB service thread ─────────────────────────────────────────────────── */
+#define USB_STACK_SIZE 1024
+#define USB_PRIORITY   -1
+
+static void usb_thread_fn(void *a, void *b, void *c)
+{
+    int64_t next_usb_status_ms = 0;
+
+    ARG_UNUSED(a);
+    ARG_UNUSED(b);
+    ARG_UNUSED(c);
+
+    while (1) {
+        if (usb_ready) {
+            butterfi_usb_poll();
+            poll_usb_diag_counters();
+
+            if (k_uptime_get() >= next_usb_status_ms) {
+                (void)butterfi_usb_send_status();
+                next_usb_status_ms = k_uptime_get() + 1000;
+            }
+        }
+
+        k_msleep(20);
+    }
+}
+
+K_THREAD_DEFINE(usb_tid, USB_STACK_SIZE,
+                usb_thread_fn, NULL, NULL, NULL,
+                USB_PRIORITY, 0, 0);
+
+static void run_usb_control_loop(void)
+{
+    while (1) {
+        if (usb_ready) {
+            butterfi_usb_poll();
+            poll_usb_diag_counters();
+        }
+
+        k_msleep(50);
+    }
+}
+
 /* ── Main ───────────────────────────────────────────────────────────────── */
 int main(void)
 {
@@ -553,6 +837,14 @@ int main(void)
         refresh_usb_status();
     }
 
+#if BUTTERFI_USB_CONTROL_DEBUG
+    LOG_WRN("USB control debug build active - Sidewalk startup skipped");
+    sidewalk_state = SIDEWALK_STATE_NOT_REGISTERED;
+    current_led_state = LED_STATE_UNPROVISIONED;
+    refresh_usb_status();
+
+    run_usb_control_loop();
+#elif BUTTERFI_INCLUDE_SIDEWALK
     /* Sidewalk stack */
     ret = sidewalk_init();
     if (ret < 0) {
@@ -567,16 +859,27 @@ int main(void)
 
     /* Main event loop — Sidewalk is event-driven */
     while (1) {
-        if (k_sem_take(&sidewalk_event_sem, K_MSEC(100)) == 0) {
+        if (usb_ready) {
+            butterfi_usb_poll();
+            poll_usb_diag_counters();
+        }
+
+        (void)k_sem_take(&sidewalk_event_sem, K_MSEC(100));
+
+        if (sid_handle != NULL) {
             sid_error_t err = sid_process(sid_handle);
             if (err != SID_ERROR_NONE) {
                 LOG_ERR("sid_process error: %d", err);
             }
         }
-
-        /* Poll USB for incoming provisioning commands */
-        butterfi_usb_poll();
     }
+#else
+    LOG_WRN("Sidewalk excluded from build");
+    sidewalk_state = SIDEWALK_STATE_NOT_REGISTERED;
+    current_led_state = LED_STATE_UNPROVISIONED;
+    refresh_usb_status();
+    run_usb_control_loop();
+#endif
 
     return 0;
 }

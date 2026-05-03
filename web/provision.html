@@ -143,6 +143,84 @@
     margin-bottom: 1.25rem;
   }
 
+  .field-help {
+    margin-top: 0.45rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+
+  code {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.78em;
+    background: var(--warm-gray);
+    padding: 1px 4px;
+    border-radius: 2px;
+  }
+
+  .batch-card {
+    border: 1.5px solid var(--ink);
+    border-radius: 2px;
+    background: white;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .batch-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.9rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+  }
+
+  .summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+
+  .summary-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    justify-content: flex-end;
+  }
+
+  .summary-pill {
+    display: inline-block;
+    padding: 0.22rem 0.5rem;
+    border: 1.5px solid var(--ink);
+    border-radius: 2px;
+    background: var(--warm-gray);
+    font-family: 'Space Mono', monospace;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .inline-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-top: 0.75rem;
+  }
+
+  .btn.tertiary {
+    width: auto;
+    padding: 0.55rem 0.9rem;
+    background: white;
+    color: var(--ink);
+    box-shadow: 3px 3px 0 var(--warm-gray);
+    font-size: 0.72rem;
+  }
+
+  .btn.tertiary:hover {
+    background: var(--warm-gray);
+    box-shadow: 4px 4px 0 var(--ink);
+  }
+
   label {
     display: block;
     font-family: 'Space Mono', monospace;
@@ -460,7 +538,41 @@
   <!-- PANEL 1: Configuration -->
   <div class="panel active" id="panel-config">
     <h1>Configure your dongle</h1>
-    <p class="subtitle">Set up a ButterFi XIAO nRF52840 and write its device configuration through the browser.</p>
+    <p class="subtitle">Load a classroom batch package once, or stage a single board manually. The browser will keep the next device ready so an operator can work through a queue without touching Zephyr or raw Sidewalk tooling.</p>
+
+    <div class="field">
+      <label>Batch Package <span class="badge">Recommended</span></label>
+      <input type="file" id="batch-package-file" accept=".json,application/json">
+      <div class="field-help">Upload a <code>butterfi-batch-v1</code> JSON package containing the shared UF2 and per-device Sidewalk credentials. Batch progress is tracked in this browser using the package <code>batch_id</code>.</div>
+    </div>
+
+    <div class="batch-card" id="batch-card" style="display:none">
+      <div class="summary-row">
+        <div>
+          <div class="batch-title" id="batch-name">Batch</div>
+          <div class="drive-sub" id="batch-progress-text"></div>
+        </div>
+        <div class="summary-pills">
+          <span class="summary-pill" id="batch-mode-pill">Batch</span>
+          <span class="summary-pill" id="batch-remaining-pill">0 remaining</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Selected Batch Device</label>
+        <div class="select-wrap">
+          <select id="batch-device-select" onchange="onBatchDeviceSelected()"></select>
+        </div>
+      </div>
+
+      <div class="field-help" id="batch-device-help"></div>
+
+      <div class="inline-actions">
+        <button class="btn tertiary" type="button" id="btn-batch-next" onclick="selectNextBatchDevice()">Use Next Device</button>
+        <button class="btn tertiary" type="button" onclick="resetBatchProgress()">Reset Batch Progress</button>
+        <button class="btn tertiary" type="button" onclick="clearActiveBatchPackage()">Unload Batch</button>
+      </div>
+    </div>
 
     <div class="field">
       <label>School / Location ID</label>
@@ -485,6 +597,18 @@
       </div>
     </div>
 
+    <div class="field">
+      <label>Release Firmware UF2</label>
+      <input type="file" id="firmware-file" accept=".uf2,application/octet-stream">
+      <div class="field-help">Manual fallback. Leave this empty when the batch package already embeds the common ButterFi release UF2.</div>
+    </div>
+
+    <div class="field">
+      <label>Sidewalk Credential Package <span class="badge">Optional</span></label>
+      <input type="file" id="sidewalk-cred-file" accept=".hex,.bin,text/plain,application/octet-stream">
+      <div class="field-help">Manual fallback. Leave this empty when the selected batch device already includes its Sidewalk manufacturing credential. When present, the browser appends it to the UF2 at the <code>mfg_storage</code> partition used by the firmware.</div>
+    </div>
+
     <button class="btn" id="btn-config-next" onclick="goToFlash()">
       Continue to Flash →
     </button>
@@ -493,7 +617,7 @@
   <!-- PANEL 2: Flash -->
   <div class="panel" id="panel-flash">
     <h1>Flash the dongle</h1>
-    <p class="subtitle">Follow these steps to test the current browser-based provisioning flow for the XIAO nRF52840.</p>
+    <p class="subtitle">The browser writes audit files first, then copies the release UF2. If a Sidewalk credential package was selected, it is merged into the UF2 before the final write.</p>
 
     <div class="instruction-box">
       <p><span class="step-num">1</span> Plug your XIAO into USB.</p>
@@ -520,8 +644,21 @@
       <div class="status-msg" id="status-msg">Preparing…</div>
     </div>
 
+    <div class="batch-card" id="runtime-config-section" style="display:none">
+      <div class="batch-title">Finish Runtime Setup</div>
+      <div class="field-help" id="runtime-config-help">
+        After the UF2 copy finishes and the board reboots, connect to the ButterFi runtime serial port to save the classroom config into NVS.
+      </div>
+      <div class="status-msg" id="runtime-config-msg">Waiting for flash to finish…</div>
+      <div class="inline-actions">
+        <button class="btn tertiary" type="button" id="btn-runtime-config" onclick="finishRuntimeProvisioning()" disabled>
+          Connect Runtime Serial
+        </button>
+      </div>
+    </div>
+
     <button class="btn" id="btn-flash" onclick="startFlash()" disabled>
-      ⚡ Write Prototype Output
+      ⚡ Build and Write UF2
     </button>
     <button class="btn secondary" onclick="goToConfig()">← Back</button>
   </div>
@@ -547,6 +684,64 @@
 let selectedDir = null;
 let flashLog = [];
 let scanInterval = null;
+let activeBatchPackage = null;
+let activeBatchDeviceIndex = -1;
+let lastProvisioningResult = null;
+let pendingRuntimeProvisioning = null;
+let runtimeProvisionRequestCounter = 1;
+
+const utf8Encoder = new TextEncoder();
+const utf8Decoder = new TextDecoder();
+
+const UF2_BLOCK_SIZE = 512;
+const UF2_MAGIC_START0 = 0x0A324655;
+const UF2_MAGIC_START1 = 0x9E5D5157;
+const UF2_MAGIC_END = 0x0AB16F30;
+const UF2_FLAG_FAMILY_ID_PRESENT = 0x00002000;
+const DEFAULT_UF2_PAYLOAD_SIZE = 256;
+const SIDEWALK_MFG_OFFSET = 0xEB000;
+const BATCH_PACKAGE_FORMAT = 'butterfi-batch-v1';
+const BATCH_PROGRESS_KEY_PREFIX = 'butterfi-batch-progress:';
+
+const USB = {
+  sync1: 0x42,
+  sync2: 0x46,
+  version: 0x01,
+  frameHostStatusRequest: 0x05,
+  frameHostConfigSave: 0x06,
+  frameDeviceStatus: 0x81,
+  frameDeviceTransferError: 0x85,
+  frameDeviceDebugText: 0x87,
+  frameDeviceConfigSaved: 0x88,
+  maxPayload: 512,
+};
+
+const runtimeDeviceStateLabels = {
+  0: 'Idle',
+  1: 'Serial ready',
+  2: 'Sidewalk starting',
+  3: 'Sidewalk ready',
+  4: 'Busy',
+  5: 'Error',
+  6: 'Sidewalk not registered',
+};
+
+const runtimeLinkStateLabels = {
+  0: 'Unknown',
+  1: 'BLE',
+  2: 'FSK',
+  3: 'LoRa',
+};
+
+const runtimeErrorCodeLabels = {
+  0x01: 'Invalid host frame',
+  0x02: 'Device busy',
+  0x03: 'Sidewalk unavailable',
+  0x04: 'Cloud fetch failed',
+  0x05: 'Transfer timed out',
+  0x06: 'Protocol mismatch',
+  0x07: 'Config save failed',
+};
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 function setPanel(name) {
@@ -555,11 +750,15 @@ function setPanel(name) {
 }
 
 function setStep(n) {
-  [1,2,3].forEach(i => {
+  [1, 2, 3].forEach(i => {
     const el = document.getElementById('s' + i);
-    el.classList.remove('active','done');
-    if (i < n) el.classList.add('done');
-    if (i === n) el.classList.add('active');
+    el.classList.remove('active', 'done');
+    if (i < n) {
+      el.classList.add('done');
+    }
+    if (i === n) {
+      el.classList.add('active');
+    }
   });
 }
 
@@ -570,36 +769,399 @@ function goToConfig() {
 }
 
 function goToFlash() {
-  const schoolId = document.getElementById('school-id').value.trim();
-  if (!schoolId) {
-    document.getElementById('school-id').focus();
-    document.getElementById('school-id').style.borderColor = 'var(--error)';
-    setTimeout(() => document.getElementById('school-id').style.borderColor = '', 1500);
+  const cfg = buildConfig();
+  const firmwareSource = getSelectedFirmwareSource();
+
+  if (!cfg.school_id) {
+    markFieldError('school-id');
     return;
   }
+
+  if (activeBatchPackage && activeBatchPackage.devices.length > 0 && activeBatchDeviceIndex < 0) {
+    setStatus('This batch has no remaining devices. Load a new batch or reset progress.', 'err');
+    return;
+  }
+
+  if (!firmwareSource) {
+    markFieldError('firmware-file');
+    return;
+  }
+
   setPanel('flash');
   setStep(2);
   document.getElementById('progress-section').style.display = 'none';
+  setProgress(0);
+  setStatus('Preparing…', '');
   startScan();
+}
+
+// ─── Batch Packages ──────────────────────────────────────────────────────────
+function base64ToBytes(value) {
+  const normalized = value.replace(/\s+/g, '');
+  const binary = atob(normalized);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index++) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function inferFormatFromName(fileName) {
+  const lower = (fileName || '').toLowerCase();
+  if (lower.endsWith('.uf2')) {
+    return 'uf2';
+  }
+  if (lower.endsWith('.hex')) {
+    return 'hex';
+  }
+  return 'bin';
+}
+
+function buildEmbeddedAsset(rawAsset, fallbackName) {
+  if (!rawAsset) {
+    return null;
+  }
+
+  const fileName = rawAsset.file_name || rawAsset.fileName || rawAsset.name || fallbackName;
+  const format = rawAsset.format || inferFormatFromName(fileName);
+  let bytes = null;
+
+  if (typeof rawAsset.content_base64 === 'string') {
+    bytes = base64ToBytes(rawAsset.content_base64);
+  } else if (typeof rawAsset.content_text === 'string') {
+    bytes = utf8Encoder.encode(rawAsset.content_text);
+  } else if (typeof rawAsset.text === 'string') {
+    bytes = utf8Encoder.encode(rawAsset.text);
+  } else if (typeof rawAsset.hex === 'string') {
+    bytes = utf8Encoder.encode(rawAsset.hex);
+  }
+
+  if (!bytes || bytes.length === 0) {
+    throw new Error(`Embedded asset ${fileName} is missing content_base64 or content_text`);
+  }
+
+  return { fileName, format, bytes };
+}
+
+function normalizeBatchDevice(rawDevice, index, defaults) {
+  const deviceId = rawDevice.device_id || rawDevice.deviceId || `device-${index + 1}`;
+  const credential = rawDevice.credential
+    ? buildEmbeddedAsset(rawDevice.credential, `${deviceId}.hex`)
+    : rawDevice.credential_base64 || rawDevice.credential_text || rawDevice.credential_hex
+      ? buildEmbeddedAsset(
+          {
+            file_name: rawDevice.credential_name || rawDevice.credentialName || `${deviceId}.hex`,
+            format: rawDevice.credential_format || rawDevice.credentialFormat,
+            content_base64: rawDevice.credential_base64,
+            content_text: rawDevice.credential_text || rawDevice.credential_hex,
+          },
+          `${deviceId}.hex`
+        )
+      : null;
+
+  return {
+    deviceId,
+    schoolId: rawDevice.school_id || rawDevice.schoolId || defaults.schoolId || '',
+    deviceName: rawDevice.device_name || rawDevice.deviceName || rawDevice.label || `ButterFi-${index + 1}`,
+    contentPkg: rawDevice.content_pkg || rawDevice.contentPkg || defaults.contentPkg || 'k12-general',
+    credential,
+  };
+}
+
+function parseBatchPackage(text) {
+  const parsed = JSON.parse(text);
+  const format = parsed.format || parsed.schema || parsed.type;
+  if (format !== BATCH_PACKAGE_FORMAT) {
+    throw new Error(`Unsupported batch package format: expected ${BATCH_PACKAGE_FORMAT}`);
+  }
+
+  if (!Array.isArray(parsed.devices) || parsed.devices.length === 0) {
+    throw new Error('Batch package must contain a non-empty devices array');
+  }
+
+  const defaults = {
+    schoolId: parsed.defaults?.school_id || parsed.defaults?.schoolId || '',
+    contentPkg: parsed.defaults?.content_pkg || parsed.defaults?.contentPkg || 'k12-general',
+  };
+
+  const batchId = parsed.batch_id || parsed.batchId || `batch-${Date.now()}`;
+  const label = parsed.label || parsed.name || batchId;
+  const firmware = parsed.firmware ? buildEmbeddedAsset(parsed.firmware, 'butterfi-xiao-sidewalk.uf2') : null;
+  const devices = parsed.devices.map((rawDevice, index) => normalizeBatchDevice(rawDevice, index, defaults));
+
+  return {
+    batchId,
+    label,
+    defaults,
+    firmware,
+    devices,
+    progress: loadBatchProgress(batchId),
+  };
+}
+
+function getBatchProgressKey(batchId) {
+  return `${BATCH_PROGRESS_KEY_PREFIX}${batchId}`;
+}
+
+function loadBatchProgress(batchId) {
+  try {
+    const stored = window.localStorage.getItem(getBatchProgressKey(batchId));
+    if (!stored) {
+      return { completed: {} };
+    }
+
+    const parsed = JSON.parse(stored);
+    return {
+      completed: parsed.completed && typeof parsed.completed === 'object' ? parsed.completed : {},
+    };
+  } catch {
+    return { completed: {} };
+  }
+}
+
+function saveBatchProgress() {
+  if (!activeBatchPackage) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      getBatchProgressKey(activeBatchPackage.batchId),
+      JSON.stringify(activeBatchPackage.progress)
+    );
+  } catch {
+    // Ignore storage failures and keep the in-memory session state.
+  }
+}
+
+function isBatchDeviceProvisioned(device) {
+  if (!activeBatchPackage || !device) {
+    return false;
+  }
+  return Boolean(activeBatchPackage.progress.completed[device.deviceId]);
+}
+
+function countBatchProvisioned() {
+  if (!activeBatchPackage) {
+    return 0;
+  }
+
+  return activeBatchPackage.devices.reduce((count, device) => {
+    return count + (isBatchDeviceProvisioned(device) ? 1 : 0);
+  }, 0);
+}
+
+function findNextBatchDeviceIndex(startIndex = 0) {
+  if (!activeBatchPackage || activeBatchPackage.devices.length === 0) {
+    return -1;
+  }
+
+  const total = activeBatchPackage.devices.length;
+  for (let offset = 0; offset < total; offset++) {
+    const index = (startIndex + offset) % total;
+    if (!isBatchDeviceProvisioned(activeBatchPackage.devices[index])) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function getActiveBatchDevice() {
+  if (!activeBatchPackage || activeBatchDeviceIndex < 0) {
+    return null;
+  }
+  return activeBatchPackage.devices[activeBatchDeviceIndex] || null;
+}
+
+function applyBatchDeviceToForm(device) {
+  if (!device) {
+    return;
+  }
+
+  document.getElementById('school-id').value = device.schoolId || '';
+  document.getElementById('device-name').value = device.deviceName || '';
+  document.getElementById('content-pkg').value = device.contentPkg || 'k12-general';
+}
+
+function renderBatchSummary() {
+  const card = document.getElementById('batch-card');
+  const select = document.getElementById('batch-device-select');
+
+  if (!activeBatchPackage) {
+    card.style.display = 'none';
+    select.innerHTML = '';
+    return;
+  }
+
+  card.style.display = 'block';
+  document.getElementById('batch-name').textContent = activeBatchPackage.label;
+
+  const provisioned = countBatchProvisioned();
+  const remaining = activeBatchPackage.devices.length - provisioned;
+  document.getElementById('batch-progress-text').textContent =
+    `${activeBatchPackage.devices.length} total · ${provisioned} provisioned · ${remaining} remaining`;
+  document.getElementById('batch-mode-pill').textContent = activeBatchPackage.firmware ? 'Embedded UF2' : 'UF2 Required';
+  document.getElementById('batch-remaining-pill').textContent =
+    remaining === 0 ? 'Batch complete' : `${remaining} remaining`;
+
+  select.innerHTML = '';
+  activeBatchPackage.devices.forEach((device, index) => {
+    const option = document.createElement('option');
+    const status = isBatchDeviceProvisioned(device) ? 'Done' : 'Ready';
+    option.value = String(index);
+    option.textContent = `${status} · ${device.deviceId} · ${device.deviceName}`;
+    select.appendChild(option);
+  });
+
+  if (activeBatchDeviceIndex >= 0) {
+    select.value = String(activeBatchDeviceIndex);
+  }
+
+  const device = getActiveBatchDevice();
+  const helpParts = [];
+  if (device) {
+    helpParts.push(`Selected device: ${device.deviceId}`);
+    helpParts.push(device.credential ? `credential: ${device.credential.fileName}` : 'credential: manual upload required');
+  } else {
+    helpParts.push('No remaining batch device is selected.');
+  }
+
+  helpParts.push(activeBatchPackage.firmware ? `firmware: ${activeBatchPackage.firmware.fileName}` : 'firmware: manual upload required');
+  helpParts.push(`progress key: ${activeBatchPackage.batchId}`);
+
+  document.getElementById('batch-device-help').textContent = helpParts.join(' · ');
+  document.getElementById('btn-batch-next').disabled = remaining === 0;
+}
+
+function setActiveBatchPackage(pkg) {
+  activeBatchPackage = pkg;
+  activeBatchDeviceIndex = findNextBatchDeviceIndex(0);
+  if (activeBatchDeviceIndex >= 0) {
+    applyBatchDeviceToForm(activeBatchPackage.devices[activeBatchDeviceIndex]);
+  }
+  renderBatchSummary();
+}
+
+async function onBatchPackageFileChange() {
+  const file = document.getElementById('batch-package-file').files[0];
+  if (!file) {
+    clearActiveBatchPackage();
+    return;
+  }
+
+  try {
+    const pkg = parseBatchPackage(await file.text());
+    setActiveBatchPackage(pkg);
+    setStatus(`Loaded batch ${pkg.label}`, 'ok');
+  } catch (error) {
+    setStatus('Batch package load failed: ' + error.message, 'err');
+    clearActiveBatchPackage();
+  }
+}
+
+function clearActiveBatchPackage() {
+  activeBatchPackage = null;
+  activeBatchDeviceIndex = -1;
+  document.getElementById('batch-package-file').value = '';
+  renderBatchSummary();
+}
+
+function onBatchDeviceSelected() {
+  if (!activeBatchPackage) {
+    return;
+  }
+
+  const value = Number.parseInt(document.getElementById('batch-device-select').value, 10);
+  if (Number.isNaN(value)) {
+    return;
+  }
+
+  activeBatchDeviceIndex = value;
+  applyBatchDeviceToForm(activeBatchPackage.devices[value]);
+  renderBatchSummary();
+}
+
+function selectNextBatchDevice() {
+  if (!activeBatchPackage) {
+    return;
+  }
+
+  const startIndex = activeBatchDeviceIndex >= 0 ? activeBatchDeviceIndex + 1 : 0;
+  const nextIndex = findNextBatchDeviceIndex(startIndex);
+  activeBatchDeviceIndex = nextIndex;
+
+  if (nextIndex >= 0) {
+    applyBatchDeviceToForm(activeBatchPackage.devices[nextIndex]);
+    setStatus(`Queued ${activeBatchPackage.devices[nextIndex].deviceId}`, 'ok');
+  } else {
+    setStatus('This batch is complete.', 'ok');
+  }
+
+  renderBatchSummary();
+}
+
+function resetBatchProgress() {
+  if (!activeBatchPackage) {
+    return;
+  }
+
+  if (!window.confirm(`Reset local progress for ${activeBatchPackage.label}?`)) {
+    return;
+  }
+
+  activeBatchPackage.progress = { completed: {} };
+  saveBatchProgress();
+  activeBatchDeviceIndex = findNextBatchDeviceIndex(0);
+  if (activeBatchDeviceIndex >= 0) {
+    applyBatchDeviceToForm(activeBatchPackage.devices[activeBatchDeviceIndex]);
+  }
+  renderBatchSummary();
+  setStatus(`Reset local progress for ${activeBatchPackage.label}`, 'ok');
+}
+
+function recordBatchProvisioning(cfg) {
+  if (!activeBatchPackage || activeBatchDeviceIndex < 0) {
+    return null;
+  }
+
+  const completedDevice = activeBatchPackage.devices[activeBatchDeviceIndex];
+  activeBatchPackage.progress.completed[completedDevice.deviceId] = {
+    provisioned_at: cfg.provisioned_at,
+    school_id: cfg.school_id,
+    device_name: cfg.device_name,
+  };
+  saveBatchProgress();
+
+  const nextIndex = findNextBatchDeviceIndex(activeBatchDeviceIndex + 1);
+  activeBatchDeviceIndex = nextIndex;
+  if (nextIndex >= 0) {
+    applyBatchDeviceToForm(activeBatchPackage.devices[nextIndex]);
+  }
+  renderBatchSummary();
+
+  return {
+    completedDeviceId: completedDevice.deviceId,
+    nextDeviceId: nextIndex >= 0 ? activeBatchPackage.devices[nextIndex].deviceId : null,
+    remaining: activeBatchPackage.devices.length - countBatchProvisioned(),
+  };
 }
 
 // ─── Drive Scanning (File System Access API) ─────────────────────────────────
 function startScan() {
-  renderDriveList([]);
   scanInterval = setInterval(scanNoop, 3000);
-
-  // Show a manual "pick drive" button since continuous FS scanning isn't
-  // possible in browsers — user must grant access explicitly
   renderManualPicker();
 }
 
 function stopScan() {
-  if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
+  if (scanInterval) {
+    clearInterval(scanInterval);
+    scanInterval = null;
+  }
 }
 
 function scanNoop() {
   // Browser security prevents enumerating drives automatically.
-  // The UI guides the user to pick the drive manually via showDirectoryPicker.
 }
 
 function renderManualPicker() {
@@ -622,10 +1184,10 @@ function renderManualPicker() {
 async function pickDrive() {
   try {
     if (!('showDirectoryPicker' in window)) {
-      // Fallback: simulate for demo purposes
       simulateDriveSelect();
       return;
     }
+
     const dir = await window.showDirectoryPicker({ mode: 'readwrite' });
     selectedDir = dir;
 
@@ -642,16 +1204,14 @@ async function pickDrive() {
     `;
     list.appendChild(item);
     document.getElementById('btn-flash').disabled = false;
-
-  } catch(e) {
-    if (e.name !== 'AbortError') {
-      setStatus('Could not access drive: ' + e.message, 'err');
+  } catch (error) {
+    if (error.name !== 'AbortError') {
+      setStatus('Could not access drive: ' + error.message, 'err');
     }
   }
 }
 
 function simulateDriveSelect() {
-  // Demo mode when File System API unavailable
   selectedDir = 'DEMO';
   const list = document.getElementById('drive-list');
   list.innerHTML = '';
@@ -668,111 +1228,787 @@ function simulateDriveSelect() {
   document.getElementById('btn-flash').disabled = false;
 }
 
-// ─── Firmware Generation ──────────────────────────────────────────────────────
+// ─── Provisioning Inputs ─────────────────────────────────────────────────────
+function getSelectedFirmwareSource() {
+  if (activeBatchPackage?.firmware) {
+    return {
+      name: activeBatchPackage.firmware.fileName,
+      kind: 'embedded',
+      format: activeBatchPackage.firmware.format,
+      bytes: activeBatchPackage.firmware.bytes,
+    };
+  }
+
+  const file = document.getElementById('firmware-file').files[0];
+  if (!file) {
+    return null;
+  }
+
+  return {
+    name: file.name,
+    kind: 'file',
+    format: inferFormatFromName(file.name),
+    file,
+  };
+}
+
+function getSelectedCredentialSource() {
+  const batchDevice = getActiveBatchDevice();
+  if (batchDevice?.credential) {
+    return {
+      name: batchDevice.credential.fileName,
+      kind: 'embedded',
+      format: batchDevice.credential.format,
+      bytes: batchDevice.credential.bytes,
+    };
+  }
+
+  const file = document.getElementById('sidewalk-cred-file').files[0];
+  if (!file) {
+    return null;
+  }
+
+  return {
+    name: file.name,
+    kind: 'file',
+    format: inferFormatFromName(file.name),
+    file,
+  };
+}
+
 function buildConfig() {
+  const firmwareSource = getSelectedFirmwareSource();
+  const credentialSource = getSelectedCredentialSource();
+  const batchDevice = getActiveBatchDevice();
+
   return {
     school_id: document.getElementById('school-id').value.trim(),
     device_name: document.getElementById('device-name').value.trim() || 'ButterFi-Dongle',
     content_pkg: document.getElementById('content-pkg').value,
+    firmware_name: firmwareSource?.name || null,
+    sidewalk_credential_name: credentialSource?.name || null,
     provisioned_at: new Date().toISOString(),
     fw_version: '1.0.0',
+    provisioning_mode: activeBatchPackage ? 'batch' : 'manual',
+    batch_id: activeBatchPackage?.batchId || null,
+    batch_label: activeBatchPackage?.label || null,
+    batch_device_id: batchDevice?.deviceId || null,
   };
 }
 
-// Current generator for the browser-based provisioning flow.
-function configToUF2Bytes(cfg) {
-  // Encode config as a UTF-8 JSON payload for the device setup flow.
-  const json = JSON.stringify(cfg, null, 2);
-  return new TextEncoder().encode(json);
+function configToJsonBytes(cfg) {
+  return utf8Encoder.encode(JSON.stringify(cfg, null, 2));
+}
+
+function buildProvisioningManifest(cfg, credentialMerged) {
+  return {
+    generated_at: new Date().toISOString(),
+    firmware_name: cfg.firmware_name,
+    sidewalk_credential_name: cfg.sidewalk_credential_name,
+    sidewalk_credential_merged: credentialMerged,
+    sidewalk_credential_address: credentialMerged ? `0x${SIDEWALK_MFG_OFFSET.toString(16)}` : null,
+    batch: activeBatchPackage
+      ? {
+          batch_id: activeBatchPackage.batchId,
+          batch_label: activeBatchPackage.label,
+          batch_device_id: cfg.batch_device_id,
+          total_devices: activeBatchPackage.devices.length,
+          completed_devices_before_write: countBatchProvisioned(),
+        }
+      : null,
+    config: cfg,
+    notes: [
+      'The browser provisioning flow writes the selected UF2 to the XIAO bootloader drive.',
+      credentialMerged
+        ? 'A Sidewalk credential package was merged into the UF2 at the mfg_storage partition.'
+        : 'No Sidewalk credential package was selected; the device will remain Sidewalk not registered.',
+      'After the UF2 flash, the browser reconnects over the ButterFi runtime serial port and saves school_id, device_name, and content_pkg into NVS.',
+      activeBatchPackage
+        ? 'The operator loaded a batch package and the browser tracked device progress locally.'
+        : 'The operator used manual single-device mode.',
+    ],
+  };
+}
+
+async function readFileBytes(file) {
+  return new Uint8Array(await file.arrayBuffer());
+}
+
+async function readAssetBytes(source) {
+  if (!source) {
+    return null;
+  }
+  return source.kind === 'file' ? readFileBytes(source.file) : source.bytes.slice();
+}
+
+async function readAssetText(source) {
+  if (!source) {
+    return null;
+  }
+  if (source.kind === 'file') {
+    return source.file.text();
+  }
+  return utf8Decoder.decode(source.bytes);
+}
+
+function parseUf2(bytes) {
+  if (bytes.length % UF2_BLOCK_SIZE !== 0) {
+    throw new Error('Firmware file is not a valid UF2: unexpected file length');
+  }
+
+  const blocks = [];
+  for (let offset = 0; offset < bytes.length; offset += UF2_BLOCK_SIZE) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset + offset, UF2_BLOCK_SIZE);
+    const magic0 = view.getUint32(0, true);
+    const magic1 = view.getUint32(4, true);
+    const magicEnd = view.getUint32(508, true);
+
+    if (magic0 !== UF2_MAGIC_START0 || magic1 !== UF2_MAGIC_START1 || magicEnd !== UF2_MAGIC_END) {
+      throw new Error('Firmware file is not a valid UF2 block stream');
+    }
+
+    const payloadSize = view.getUint32(16, true);
+    if (payloadSize <= 0 || payloadSize > 476) {
+      throw new Error(`Unsupported UF2 payload size: ${payloadSize}`);
+    }
+
+    blocks.push({
+      flags: view.getUint32(8, true),
+      targetAddr: view.getUint32(12, true),
+      payloadSize,
+      familyId: view.getUint32(28, true),
+      payload: bytes.slice(offset + 32, offset + 32 + payloadSize),
+    });
+  }
+
+  return blocks;
+}
+
+function parseIntelHex(text) {
+  const byteMap = new Map();
+  let linearBase = 0;
+  let segmentBase = 0;
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    if (!line.startsWith(':')) {
+      throw new Error('Credential hex contains an invalid record');
+    }
+
+    const byteCount = Number.parseInt(line.slice(1, 3), 16);
+    const address = Number.parseInt(line.slice(3, 7), 16);
+    const recordType = Number.parseInt(line.slice(7, 9), 16);
+    const expectedChars = 11 + (byteCount * 2);
+    if (line.length < expectedChars) {
+      throw new Error('Credential hex contains a truncated record');
+    }
+
+    const dataBytes = [];
+    for (let index = 0; index < byteCount; index++) {
+      const start = 9 + (index * 2);
+      dataBytes.push(Number.parseInt(line.slice(start, start + 2), 16));
+    }
+
+    if (recordType === 0x00) {
+      const baseAddress = linearBase + segmentBase + address;
+      dataBytes.forEach((value, index) => {
+        byteMap.set(baseAddress + index, value);
+      });
+      continue;
+    }
+
+    if (recordType === 0x01) {
+      break;
+    }
+
+    if (recordType === 0x02) {
+      segmentBase = Number.parseInt(line.slice(9, 13), 16) << 4;
+      linearBase = 0;
+      continue;
+    }
+
+    if (recordType === 0x04) {
+      linearBase = Number.parseInt(line.slice(9, 13), 16) << 16;
+      segmentBase = 0;
+    }
+  }
+
+  if (byteMap.size === 0) {
+    throw new Error('Credential hex did not contain any data records');
+  }
+
+  return byteMap;
+}
+
+function buildCredentialBlocks(byteMap, payloadSize, flags, familyId) {
+  const grouped = new Map();
+  const addresses = Array.from(byteMap.keys()).sort((left, right) => left - right);
+
+  for (const address of addresses) {
+    const blockAddress = Math.floor(address / payloadSize) * payloadSize;
+    if (!grouped.has(blockAddress)) {
+      const payload = new Uint8Array(payloadSize);
+      payload.fill(0xFF);
+      grouped.set(blockAddress, payload);
+    }
+    grouped.get(blockAddress)[address - blockAddress] = byteMap.get(address);
+  }
+
+  return Array.from(grouped.entries())
+    .sort((left, right) => left[0] - right[0])
+    .map(([targetAddr, payload]) => ({ flags, targetAddr, payloadSize, familyId, payload }));
+}
+
+function encodeUf2(blocks) {
+  const out = new Uint8Array(blocks.length * UF2_BLOCK_SIZE);
+
+  blocks.forEach((block, index) => {
+    const offset = index * UF2_BLOCK_SIZE;
+    const view = new DataView(out.buffer, offset, UF2_BLOCK_SIZE);
+
+    view.setUint32(0, UF2_MAGIC_START0, true);
+    view.setUint32(4, UF2_MAGIC_START1, true);
+    view.setUint32(8, block.flags, true);
+    view.setUint32(12, block.targetAddr, true);
+    view.setUint32(16, block.payloadSize, true);
+    view.setUint32(20, index, true);
+    view.setUint32(24, blocks.length, true);
+    view.setUint32(28, block.familyId, true);
+    out.set(block.payload, offset + 32);
+    view.setUint32(508, UF2_MAGIC_END, true);
+  });
+
+  return out;
+}
+
+async function mergeSidewalkCredentialIntoUf2(baseUf2Bytes, credentialSource) {
+  const blocks = parseUf2(baseUf2Bytes);
+  if (blocks.length === 0) {
+    throw new Error('Firmware file did not contain any UF2 blocks');
+  }
+
+  const firstBlock = blocks[0];
+  const payloadSize = firstBlock.payloadSize || DEFAULT_UF2_PAYLOAD_SIZE;
+  const flags = firstBlock.flags || UF2_FLAG_FAMILY_ID_PRESENT;
+  const familyId = firstBlock.familyId || 0;
+
+  let byteMap;
+  if (credentialSource.format === 'hex' || credentialSource.name.toLowerCase().endsWith('.hex')) {
+    byteMap = parseIntelHex(await readAssetText(credentialSource));
+  } else {
+    const bytes = await readAssetBytes(credentialSource);
+    byteMap = new Map();
+    bytes.forEach((value, index) => {
+      byteMap.set(SIDEWALK_MFG_OFFSET + index, value);
+    });
+  }
+
+  const credentialBlocks = buildCredentialBlocks(byteMap, payloadSize, flags, familyId);
+  if (credentialBlocks.length === 0) {
+    throw new Error('Credential package did not produce any UF2 blocks');
+  }
+
+  return encodeUf2(blocks.concat(credentialBlocks));
+}
+
+async function writeFileToDirectory(dirHandle, fileName, bytes, type) {
+  const handle = await dirHandle.getFileHandle(fileName, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(new Blob([bytes], { type }));
+  await writable.close();
+}
+
+// ─── Runtime Serial Provisioning ────────────────────────────────────────────
+class ButterfiFrameParser {
+  constructor() {
+    this.buffer = [];
+    this.expectedLength = 0;
+  }
+
+  reset() {
+    this.buffer = [];
+    this.expectedLength = 0;
+  }
+
+  push(chunk) {
+    const frames = [];
+
+    for (const byte of chunk) {
+      if (this.buffer.length === 0 && byte !== USB.sync1) {
+        continue;
+      }
+
+      if (this.buffer.length === 1 && byte !== USB.sync2) {
+        this.buffer = byte === USB.sync1 ? [USB.sync1] : [];
+        this.expectedLength = 0;
+        continue;
+      }
+
+      this.buffer.push(byte);
+
+      if (this.buffer.length === 8) {
+        const payloadLength = this.buffer[6] | (this.buffer[7] << 8);
+        if (this.buffer[2] !== USB.version || payloadLength > USB.maxPayload) {
+          this.reset();
+          continue;
+        }
+
+        this.expectedLength = 8 + payloadLength + 1;
+      }
+
+      if (this.expectedLength > 0 && this.buffer.length === this.expectedLength) {
+        const frameBytes = Uint8Array.from(this.buffer);
+        const checksum = frameBytes.slice(2, frameBytes.length - 1)
+          .reduce((xor, current) => xor ^ current, 0);
+
+        if (checksum === frameBytes[frameBytes.length - 1]) {
+          frames.push({
+            frameType: frameBytes[3],
+            requestId: frameBytes[4],
+            flags: frameBytes[5],
+            payload: frameBytes.slice(8, frameBytes.length - 1),
+          });
+        }
+
+        this.reset();
+      }
+    }
+
+    return frames;
+  }
+}
+
+function encodeUsbFrame(frameType, requestId, payload = new Uint8Array(0), flags = 0) {
+  if (payload.length > USB.maxPayload) {
+    throw new Error('Payload too large for ButterFi USB frame');
+  }
+
+  const buffer = new Uint8Array(8 + payload.length + 1);
+  buffer[0] = USB.sync1;
+  buffer[1] = USB.sync2;
+  buffer[2] = USB.version;
+  buffer[3] = frameType;
+  buffer[4] = requestId;
+  buffer[5] = flags;
+  buffer[6] = payload.length & 0xff;
+  buffer[7] = (payload.length >> 8) & 0xff;
+  buffer.set(payload, 8);
+  buffer[buffer.length - 1] = buffer.slice(2, buffer.length - 1)
+    .reduce((xor, current) => xor ^ current, 0);
+  return buffer;
+}
+
+function nextRuntimeProvisionRequestId() {
+  const current = runtimeProvisionRequestCounter;
+  runtimeProvisionRequestCounter = runtimeProvisionRequestCounter >= 255 ? 1 : runtimeProvisionRequestCounter + 1;
+  return current;
+}
+
+function buildRuntimeConfigPayload(cfg) {
+  return utf8Encoder.encode(JSON.stringify({
+    school_id: cfg.school_id,
+    device_name: cfg.device_name,
+    content_pkg: cfg.content_pkg,
+  }));
+}
+
+function setRuntimeConfigStatus(message, type = '') {
+  const el = document.getElementById('runtime-config-msg');
+  el.textContent = message;
+  el.className = 'status-msg' + (type ? ' ' + type : '');
+}
+
+function hideRuntimeProvisioningPrompt() {
+  pendingRuntimeProvisioning = null;
+  document.getElementById('runtime-config-section').style.display = 'none';
+  document.getElementById('btn-runtime-config').disabled = true;
+  setRuntimeConfigStatus('Waiting for flash to finish…', '');
+}
+
+function showRuntimeProvisioningPrompt(cfg, credentialMerged) {
+  pendingRuntimeProvisioning = { cfg, credentialMerged };
+  document.getElementById('runtime-config-section').style.display = 'block';
+  document.getElementById('runtime-config-help').textContent =
+    `Flash complete for "${cfg.device_name}". After the board reboots into ButterFi, connect the runtime serial port to save school_id, device_name, and content_pkg into NVS.`;
+
+  if (!navigator.serial) {
+    document.getElementById('btn-runtime-config').disabled = true;
+    setRuntimeConfigStatus('Web Serial is not available in this browser, so runtime config cannot be saved here.', 'err');
+    return;
+  }
+
+  document.getElementById('btn-runtime-config').disabled = false;
+  setRuntimeConfigStatus('Flash complete. Wait for the board to reboot, then click Connect Runtime Serial.', '');
+}
+
+function formatRuntimeStatusFrame(frame) {
+  if (!frame || frame.payload.length < 3) {
+    return 'Connected to serial port';
+  }
+
+  const deviceState = runtimeDeviceStateLabels[frame.payload[0]] || `State ${frame.payload[0]}`;
+  const linkState = runtimeLinkStateLabels[frame.payload[1]] || `Link ${frame.payload[1]}`;
+  const activeRequest = frame.payload[2] ? `request ${frame.payload[2]}` : 'no active request';
+  return `${deviceState} · ${linkState} · ${activeRequest}`;
+}
+
+function formatRuntimePortInfo(port) {
+  const info = port.getInfo();
+  const vendor = typeof info.usbVendorId === 'number' ? info.usbVendorId.toString(16) : '?';
+  const product = typeof info.usbProductId === 'number' ? info.usbProductId.toString(16) : '?';
+  return `USB ${vendor}:${product}`;
+}
+
+async function openRuntimeSerialSession() {
+  const port = await navigator.serial.requestPort();
+  await port.open({ baudRate: 115200, bufferSize: 4096 });
+
+  if (typeof port.setSignals === 'function') {
+    try {
+      await port.setSignals({ dataTerminalReady: true, requestToSend: true });
+    } catch {
+      // Some browser/platform combinations do not expose signal control.
+    }
+  }
+
+  return {
+    port,
+    reader: port.readable.getReader(),
+    writer: port.writable.getWriter(),
+    parser: new ButterfiFrameParser(),
+  };
+}
+
+async function closeRuntimeSerialSession(session) {
+  if (!session) {
+    return;
+  }
+
+  if (typeof session.port.setSignals === 'function') {
+    try {
+      await session.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+    } catch {
+      // Ignore cleanup signal failures.
+    }
+  }
+
+  if (session.reader) {
+    try {
+      await session.reader.cancel();
+    } catch {
+      // Ignore cancellation failures during cleanup.
+    }
+    session.reader.releaseLock();
+  }
+
+  if (session.writer) {
+    session.writer.releaseLock();
+  }
+
+  await session.port.close();
+}
+
+async function writeRuntimeFrame(session, frameType, requestId, payload = new Uint8Array(0)) {
+  await session.writer.write(encodeUsbFrame(frameType, requestId, payload));
+}
+
+async function readWithTimeout(reader, timeoutMs) {
+  let timeoutId;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        timeoutId = window.setTimeout(() => {
+          reject(new Error('Timed out waiting for ButterFi serial response'));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+function processRuntimeInformationalFrame(frame) {
+  if (frame.frameType === USB.frameDeviceStatus) {
+    const statusText = formatRuntimeStatusFrame(frame);
+    setRuntimeConfigStatus(`Runtime status: ${statusText}`, '');
+    log(`Runtime serial status: ${statusText}`);
+    return;
+  }
+
+  if (frame.frameType === USB.frameDeviceDebugText) {
+    const detail = utf8Decoder.decode(frame.payload);
+    if (detail) {
+      log(`Runtime serial debug: ${detail}`);
+    }
+  }
+}
+
+async function waitForRuntimeFrame(session, predicate, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new Error('Timed out waiting for ButterFi serial response');
+    }
+
+    const { value, done } = await readWithTimeout(session.reader, remaining);
+    if (done) {
+      throw new Error('ButterFi serial port closed before provisioning finished');
+    }
+
+    if (!value) {
+      continue;
+    }
+
+    const frames = session.parser.push(value);
+    for (const frame of frames) {
+      processRuntimeInformationalFrame(frame);
+      if (predicate(frame)) {
+        return frame;
+      }
+    }
+  }
+}
+
+async function finishRuntimeProvisioning() {
+  if (!pendingRuntimeProvisioning) {
+    return;
+  }
+
+  const button = document.getElementById('btn-runtime-config');
+  const { cfg, credentialMerged } = pendingRuntimeProvisioning;
+  let session = null;
+
+  button.disabled = true;
+  setRuntimeConfigStatus('Select the ButterFi runtime serial port…', '');
+
+  try {
+    session = await openRuntimeSerialSession();
+    const portInfo = formatRuntimePortInfo(session.port);
+    log(`Runtime serial connected: ${portInfo}`);
+
+    setRuntimeConfigStatus(`Connected to ${portInfo}. Waiting for ButterFi runtime status…`, '');
+    await writeRuntimeFrame(session, USB.frameHostStatusRequest, 0);
+    await waitForRuntimeFrame(session, frame => frame.frameType === USB.frameDeviceStatus, 8000);
+
+    const requestId = nextRuntimeProvisionRequestId();
+    setRuntimeConfigStatus('Writing runtime config into NVS…', '');
+    await writeRuntimeFrame(session, USB.frameHostConfigSave, requestId, buildRuntimeConfigPayload(cfg));
+
+    const resultFrame = await waitForRuntimeFrame(
+      session,
+      frame => frame.requestId === requestId && (
+        frame.frameType === USB.frameDeviceConfigSaved ||
+        frame.frameType === USB.frameDeviceTransferError
+      ),
+      10000
+    );
+
+    if (resultFrame.frameType === USB.frameDeviceTransferError) {
+      const errorCode = resultFrame.payload[0] ?? 0;
+      const detail = resultFrame.payload.length > 1 ? utf8Decoder.decode(resultFrame.payload.slice(1)) : '';
+      const label = runtimeErrorCodeLabels[errorCode] || `Error ${errorCode}`;
+      throw new Error(detail ? `${label}: ${detail}` : label);
+    }
+
+    const successDetail = resultFrame.payload.length > 0 ? utf8Decoder.decode(resultFrame.payload) : 'config saved';
+    setRuntimeConfigStatus(`Runtime config saved: ${successDetail}`, 'ok');
+    setProgress(100);
+    setStatus('Done!', 'ok');
+    log(`Runtime config saved over USB serial: ${successDetail}`);
+
+    lastProvisioningResult = {
+      cfg,
+      credentialMerged,
+      runtimeConfigSaved: true,
+      batchResult: recordBatchProvisioning(cfg),
+    };
+
+    hideRuntimeProvisioningPrompt();
+    setTimeout(goToDone, 400);
+  } catch (error) {
+    setRuntimeConfigStatus('Runtime config failed: ' + error.message, 'err');
+    log('ERROR: runtime config failed: ' + error.message);
+    button.disabled = false;
+  } finally {
+    if (session) {
+      await closeRuntimeSerialSession(session);
+    }
+  }
 }
 
 // ─── Flashing ────────────────────────────────────────────────────────────────
 async function startFlash() {
   const cfg = buildConfig();
-  const bytes = configToUF2Bytes(cfg);
+  const firmwareSource = getSelectedFirmwareSource();
+  const credentialSource = getSelectedCredentialSource();
+  const configBytes = configToJsonBytes(cfg);
   flashLog = [];
 
   document.getElementById('btn-flash').disabled = true;
   document.getElementById('progress-section').style.display = 'block';
+  hideRuntimeProvisioningPrompt();
 
   log(`Flash started — ${cfg.device_name} @ ${cfg.school_id}`);
+  log(`Mode: ${cfg.provisioning_mode}`);
+  if (cfg.batch_id) {
+    log(`Batch: ${cfg.batch_id} / ${cfg.batch_device_id}`);
+  }
+  log(`Firmware: ${cfg.firmware_name}`);
   log(`Content: ${cfg.content_pkg}`);
+  if (credentialSource) {
+    log(`Credential package: ${credentialSource.name}`);
+  } else {
+    log('No Sidewalk credential package selected; device will stay not registered.');
+  }
 
   if (selectedDir === 'DEMO') {
-    await simulateFlash(cfg, bytes);
+    await simulateFlash(cfg, firmwareSource, credentialSource);
     return;
   }
 
   try {
-    setStatus('Writing device config…', '');
-    setProgress(20);
+    if (!firmwareSource) {
+      throw new Error('Select a release UF2 before flashing');
+    }
 
-    // Write config.json to the UF2 drive
-    const cfgFile = await selectedDir.getFileHandle('butterfi_config.json', { create: true });
-    const writable = await cfgFile.createWritable();
-    await writable.write(new Blob([bytes], { type: 'application/json' }));
-    await writable.close();
+    setStatus('Preparing release UF2…', '');
+    setProgress(10);
+    let uf2Bytes = await readAssetBytes(firmwareSource);
+    let credentialMerged = false;
+
+    if (credentialSource) {
+      setStatus('Merging Sidewalk credential into UF2…', '');
+      setProgress(30);
+      uf2Bytes = await mergeSidewalkCredentialIntoUf2(uf2Bytes, credentialSource);
+      credentialMerged = true;
+      log(`Merged Sidewalk credential into mfg_storage @ 0x${SIDEWALK_MFG_OFFSET.toString(16)}`);
+    }
+
+    const manifestBytes = utf8Encoder.encode(
+      JSON.stringify(buildProvisioningManifest(cfg, credentialMerged), null, 2)
+    );
+
+    setStatus('Writing device config…', '');
+    setProgress(45);
+    await writeFileToDirectory(selectedDir, 'butterfi_config.json', configBytes, 'application/json');
     log('Config written to drive');
-    setProgress(60);
+    setProgress(55);
+
+    setStatus('Writing provisioning manifest…', '');
+    await writeFileToDirectory(selectedDir, 'butterfi_provisioning_manifest.json', manifestBytes, 'application/json');
+    log('Provisioning manifest written to drive');
+    setProgress(65);
+
+    setStatus('Writing provisioned UF2…', '');
+    await writeFileToDirectory(selectedDir, firmwareSource.name, uf2Bytes, 'application/octet-stream');
+    log(`UF2 written to drive as ${firmwareSource.name}`);
+    setProgress(80);
 
     setStatus('Verifying…', '');
     await sleep(400);
-    setProgress(90);
-
-    // In real flow: drop the .uf2 file here and the bootloader reboots
-    // const uf2File = await selectedDir.getFileHandle('firmware.uf2', { create: true });
-    // ... write patched uf2 bytes ...
-
-    setProgress(100);
-    setStatus('Done!', 'ok');
-    log('Write complete');
-    setTimeout(goToDone, 600);
-
-  } catch(e) {
-    setStatus('Write failed: ' + e.message, 'err');
-    log('ERROR: ' + e.message);
+    setStatus('Flash complete. Finish runtime setup below.', 'ok');
+    log('UF2 write complete; waiting for runtime serial provisioning');
+    showRuntimeProvisioningPrompt(cfg, credentialMerged);
+  } catch (error) {
+    setStatus('Write failed: ' + error.message, 'err');
+    log('ERROR: ' + error.message);
     document.getElementById('btn-flash').disabled = false;
   }
 }
 
-async function simulateFlash(cfg, bytes) {
+async function simulateFlash(cfg, firmwareSource, credentialSource) {
   const stages = [
-    [15,  'Connecting to bootloader…'],
-    [35,  'Preparing write…'],
-    [55,  'Writing config payload…'],
-    [75,  'Finalizing write…'],
-    [90,  'Verifying checksum…'],
+    [15, 'Connecting to bootloader…'],
+    [30, credentialSource ? 'Merging Sidewalk credential…' : 'Preparing release UF2…'],
+    [50, 'Writing config payload…'],
+    [65, 'Writing provisioning manifest…'],
+    [80, 'Writing provisioned UF2…'],
+    [95, 'Writing runtime config to NVS…'],
     [100, 'Complete!'],
   ];
+
   for (const [pct, msg] of stages) {
     setProgress(pct);
     setStatus(msg, pct === 100 ? 'ok' : '');
     log(msg);
     await sleep(450 + Math.random() * 200);
   }
+
+  log(`Firmware: ${firmwareSource?.name || 'demo-firmware.uf2'}`);
+  if (credentialSource) {
+    log(`Sidewalk credential merged from ${credentialSource.name} into 0x${SIDEWALK_MFG_OFFSET.toString(16)}`);
+  } else {
+    log('No Sidewalk credential package selected');
+  }
   log(`Device: ${cfg.device_name}`);
   log(`School: ${cfg.school_id}`);
   log(`Content: ${cfg.content_pkg}`);
   log(`Provisioned: ${cfg.provisioned_at}`);
+
+  lastProvisioningResult = {
+    cfg,
+    credentialMerged: Boolean(credentialSource),
+    runtimeConfigSaved: true,
+    batchResult: recordBatchProvisioning(cfg),
+  };
+
   setTimeout(goToDone, 700);
 }
 
 function goToDone() {
   stopScan();
-  const cfg = buildConfig();
-  document.getElementById('done-msg').textContent =
-    `"${cfg.device_name}" configured for ${cfg.school_id}. Ready for deployment.`;
+  const result = lastProvisioningResult || {
+    cfg: buildConfig(),
+    credentialMerged: Boolean(getSelectedCredentialSource()),
+    batchResult: null,
+  };
+
+  let message = `"${result.cfg.device_name}" configured for ${result.cfg.school_id}. Runtime config was saved over USB serial.`;
+
+  message += result.credentialMerged
+    ? ' The Sidewalk credential package was merged into the flashed UF2.'
+    : ' Base firmware was flashed without a Sidewalk credential package.';
+
+  if (result.batchResult?.nextDeviceId) {
+    message += ` Next up: ${result.batchResult.nextDeviceId}.`;
+  } else if (result.cfg.provisioning_mode === 'batch') {
+    message += ' This batch is complete.';
+  }
+
+  document.getElementById('done-msg').textContent = message;
   setPanel('done');
   setStep(3);
 }
 
 function reset() {
   selectedDir = null;
-  document.getElementById('school-id').value = '';
-  document.getElementById('device-name').value = '';
-  document.getElementById('content-pkg').value = 'k12-general';
+  lastProvisioningResult = null;
+  pendingRuntimeProvisioning = null;
   document.getElementById('btn-flash').disabled = true;
   document.getElementById('progress-section').style.display = 'none';
+  setProgress(0);
+  setStatus('Preparing…', '');
+  hideRuntimeProvisioningPrompt();
+
+  if (activeBatchPackage) {
+    if (activeBatchDeviceIndex >= 0) {
+      applyBatchDeviceToForm(activeBatchPackage.devices[activeBatchDeviceIndex]);
+    }
+    renderBatchSummary();
+  } else {
+    document.getElementById('school-id').value = '';
+    document.getElementById('device-name').value = '';
+    document.getElementById('content-pkg').value = 'k12-general';
+    document.getElementById('firmware-file').value = '';
+    document.getElementById('sidewalk-cred-file').value = '';
+  }
+
   goToConfig();
 }
 
@@ -801,7 +2037,21 @@ function setStatus(msg, type) {
   el.className = 'status-msg' + (type ? ' ' + type : '');
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function markFieldError(id) {
+  const el = document.getElementById(id);
+  el.focus();
+  el.style.borderColor = 'var(--error)';
+  setTimeout(() => {
+    el.style.borderColor = '';
+  }, 1500);
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+document.getElementById('batch-package-file').addEventListener('change', onBatchPackageFileChange);
+renderBatchSummary();
 </script>
 
 </body>
