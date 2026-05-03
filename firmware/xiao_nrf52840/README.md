@@ -89,6 +89,19 @@ Then send JSON commands such as:
 {"cmd":"provision","school_id":"BOULDER-HS-01","device_name":"Room 204","content_pkg":"k12-general"}
 ```
 
+## Optional diagnostics
+
+These helpers are for quick local sanity checks after flashing. If the board
+shows up on a different serial port, pass that path with `--tty`.
+
+```bash
+./scripts/probe-cdc-echo.py --tty /dev/ttyACM0
+./scripts/probe-butterfi-status.py --tty /dev/ttyACM0
+```
+
+The echo probe sends one text line and prints the response. The status probe
+sends the framed ButterFi status request and decodes any returned frames.
+
 ## LED States
 
 | Color          | Pattern      | Meaning                  |

@@ -90,6 +90,8 @@ The XIAO firmware build flow is documented in
 
 The checked-in helper script is [scripts/build-xiao.sh](scripts/build-xiao.sh). If you are not already inside an nRF Connect SDK shell, point `NCS_ENV_JSON` at your local toolchain manager `environment.json` file before running it.
 
+For quick post-flash USB sanity checks, the firmware guide also documents two optional probe scripts in [firmware/xiao_nrf52840/README.md](firmware/xiao_nrf52840/README.md).
+
 ## Browser Tools
 
 The browser-side tools live in [web/README.md](web/README.md). There are currently two entry points:
