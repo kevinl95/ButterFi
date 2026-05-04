@@ -537,13 +537,13 @@
 
   <!-- PANEL 1: Configuration -->
   <div class="panel active" id="panel-config">
-    <h1>Configure your dongle</h1>
-    <p class="subtitle">Load a classroom batch package once, or stage a single board manually. The browser will keep the next device ready so an operator can work through a queue without touching Zephyr or raw Sidewalk tooling.</p>
+    <h1>Configure your ButterFi device</h1>
+    <p class="subtitle">For one device, upload a prebuilt UF2 and a Sidewalk credential package. If you are preparing several devices, you can load a batch package instead.</p>
 
     <div class="field">
-      <label>Batch Package <span class="badge">Recommended</span></label>
+      <label>Batch Package <span class="badge">Optional</span></label>
       <input type="file" id="batch-package-file" accept=".json,application/json">
-      <div class="field-help">Upload a <code>butterfi-batch-v1</code> JSON package containing the shared UF2 and per-device Sidewalk credentials. Batch progress is tracked in this browser using the package <code>batch_id</code>.</div>
+      <div class="field-help">Use this when you already have a <code>butterfi-batch-v1</code> JSON package containing a shared UF2 and per-device Sidewalk credentials. Batch progress is tracked in this browser using the package <code>batch_id</code>.</div>
     </div>
 
     <div class="batch-card" id="batch-card" style="display:none">
@@ -600,13 +600,13 @@
     <div class="field">
       <label>Release Firmware UF2</label>
       <input type="file" id="firmware-file" accept=".uf2,application/octet-stream">
-      <div class="field-help">Manual fallback. Leave this empty when the batch package already embeds the common ButterFi release UF2.</div>
+      <div class="field-help">For most self-hosted setups, upload the prebuilt ButterFi release UF2 here. Leave this empty only when the batch package already embeds it.</div>
     </div>
 
     <div class="field">
       <label>Sidewalk Credential Package <span class="badge">Optional</span></label>
-      <input type="file" id="sidewalk-cred-file" accept=".hex,.bin,text/plain,application/octet-stream">
-      <div class="field-help">Manual fallback. Leave this empty when the selected batch device already includes its Sidewalk manufacturing credential. When present, the browser appends it to the UF2 at the <code>mfg_storage</code> partition used by the firmware.</div>
+      <input type="file" id="sidewalk-cred-file" accept=".hex,.bin,.json,text/plain,application/json,application/octet-stream">
+      <div class="field-help">Leave this empty when the selected batch device already includes its Sidewalk manufacturing credential. Otherwise upload either the raw AWS <code>certificate.json</code> file or a <code>.hex</code> or <code>.bin</code> credential asset. When present, the browser appends the resulting manufacturing page to the UF2 at the <code>mfg_storage</code> partition used by the firmware.</div>
     </div>
 
     <button class="btn" id="btn-config-next" onclick="goToFlash()">
@@ -647,7 +647,7 @@
     <div class="batch-card" id="runtime-config-section" style="display:none">
       <div class="batch-title">Finish Runtime Setup</div>
       <div class="field-help" id="runtime-config-help">
-        After the UF2 copy finishes and the board reboots, connect to the ButterFi runtime serial port to save the classroom config into NVS.
+        After the UF2 copy finishes and the board reboots, connect to the ButterFi runtime serial port to save the device config into NVS.
       </div>
       <div class="status-msg" id="runtime-config-msg">Waiting for flash to finish…</div>
       <div class="inline-actions">
@@ -702,6 +702,15 @@ const DEFAULT_UF2_PAYLOAD_SIZE = 256;
 const SIDEWALK_MFG_OFFSET = 0xEB000;
 const BATCH_PACKAGE_FORMAT = 'butterfi-batch-v1';
 const BATCH_PROGRESS_KEY_PREFIX = 'butterfi-batch-progress:';
+const SIDEWALK_MFG_TLV_VERSION = 8;
+const SIDEWALK_WORD_SIZE = 4;
+const SIDEWALK_SMSN_SIZE = 32;
+const SIDEWALK_SERIAL_SIZE_WITHOUT_EXPANSION = 4;
+const SIDEWALK_PRIVATE_KEY_SIZE = 32;
+const SIDEWALK_ED25519_PUB_SIZE = 32;
+const SIDEWALK_P256R1_PUB_SIZE = 64;
+const SIDEWALK_SIGNATURE_SIZE = 64;
+const SIDEWALK_CHAIN_ORDER = ['device', 'dak', 'product', 'man', 'sw', 'root'];
 
 const USB = {
   sync1: 0x42,
@@ -813,6 +822,9 @@ function inferFormatFromName(fileName) {
   }
   if (lower.endsWith('.hex')) {
     return 'hex';
+  }
+  if (lower.endsWith('.json')) {
+    return 'json';
   }
   return 'bin';
 }
@@ -1351,6 +1363,209 @@ async function readAssetText(source) {
   return utf8Decoder.decode(source.bytes);
 }
 
+function hexToBytes(value, label = 'hex string') {
+  const normalized = String(value || '').replace(/\s+/g, '');
+  if (!normalized || normalized.length % 2 !== 0 || /[^0-9a-f]/i.test(normalized)) {
+    throw new Error(`${label} must contain an even number of hexadecimal characters`);
+  }
+
+  const bytes = new Uint8Array(normalized.length / 2);
+  for (let index = 0; index < normalized.length; index += 2) {
+    bytes[index / 2] = Number.parseInt(normalized.slice(index, index + 2), 16);
+  }
+  return bytes;
+}
+
+function concatUint8Arrays(chunks) {
+  const totalLength = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const out = new Uint8Array(totalLength);
+  let offset = 0;
+
+  chunks.forEach(chunk => {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  });
+
+  return out;
+}
+
+function readUint32LittleEndian(bytes, offset) {
+  if (offset + 4 > bytes.length) {
+    throw new Error('Certificate chain ended unexpectedly while reading a serial number');
+  }
+
+  return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true);
+}
+
+function getSidewalkSerialLength(bytes, offset) {
+  const serialHeader = readUint32LittleEndian(bytes, offset);
+  if ((serialHeader & 0xF0000000) === 0xB0000000) {
+    return ((serialHeader >>> 16) & 0x7F) + 2;
+  }
+  return SIDEWALK_SERIAL_SIZE_WITHOUT_EXPANSION;
+}
+
+function sliceChecked(bytes, offset, length, label) {
+  const end = offset + length;
+  if (end > bytes.length) {
+    throw new Error(`${label} is shorter than expected`);
+  }
+  return bytes.slice(offset, end);
+}
+
+function parseAwsCertificateChain(certBase64, privateKeyHex, pubSize, chainLabel, trimLeadingZero = false) {
+  const certificateBytes = base64ToBytes(String(certBase64 || '').replace(/\s+/g, ''));
+  let privateKeyBytes = hexToBytes(privateKeyHex, `${chainLabel} private key`);
+
+  if (trimLeadingZero && privateKeyBytes.length === SIDEWALK_PRIVATE_KEY_SIZE + 1 && privateKeyBytes[0] === 0) {
+    privateKeyBytes = privateKeyBytes.slice(1);
+  }
+
+  if (privateKeyBytes.length !== SIDEWALK_PRIVATE_KEY_SIZE) {
+    throw new Error(`${chainLabel} private key must be ${SIDEWALK_PRIVATE_KEY_SIZE} bytes`);
+  }
+
+  const fields = { devicePrk: privateKeyBytes };
+  let offset = 0;
+
+  SIDEWALK_CHAIN_ORDER.forEach(name => {
+    const serialLength = name === 'device'
+      ? SIDEWALK_SMSN_SIZE
+      : getSidewalkSerialLength(certificateBytes, offset);
+
+    fields[`${name}Serial`] = sliceChecked(certificateBytes, offset, serialLength, `${chainLabel} ${name} serial`);
+    offset += serialLength;
+    fields[`${name}Pub`] = sliceChecked(certificateBytes, offset, pubSize, `${chainLabel} ${name} public key`);
+    offset += pubSize;
+    fields[`${name}Sig`] = sliceChecked(certificateBytes, offset, SIDEWALK_SIGNATURE_SIZE, `${chainLabel} ${name} signature`);
+    offset += SIDEWALK_SIGNATURE_SIZE;
+  });
+
+  if (offset !== certificateBytes.length) {
+    throw new Error(`${chainLabel} certificate chain is longer than expected`);
+  }
+
+  return fields;
+}
+
+function resolveAwsCertificateApid(certificateJson) {
+  const metadata = certificateJson?.metadata;
+  if (!metadata || typeof metadata !== 'object') {
+    throw new Error('certificate.json is missing metadata');
+  }
+
+  if (typeof metadata.apid === 'string' && metadata.apid.length > 0) {
+    return metadata.apid;
+  }
+
+  if (typeof metadata.deviceTypeId === 'string' && metadata.deviceTypeId.length >= 4) {
+    return metadata.deviceTypeId.slice(-4);
+  }
+
+  throw new Error('certificate.json is missing metadata.apid or metadata.deviceTypeId');
+}
+
+function buildSidewalkTlv(tag, valueBytes) {
+  const header = new Uint8Array(4);
+  const view = new DataView(header.buffer);
+  view.setUint16(0, tag, false);
+  view.setUint16(2, valueBytes.length, false);
+
+  const paddingLength = (SIDEWALK_WORD_SIZE - ((header.length + valueBytes.length) % SIDEWALK_WORD_SIZE)) % SIDEWALK_WORD_SIZE;
+  const padding = new Uint8Array(paddingLength);
+  padding.fill(0xFF);
+  return concatUint8Arrays([header, valueBytes, padding]);
+}
+
+function encodeAwsCertificateJsonToSidewalkBinary(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`Credential JSON is not valid JSON: ${error.message}`);
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Credential JSON must contain an object payload');
+  }
+
+  const metadata = parsed.metadata;
+  if (!metadata || typeof metadata !== 'object') {
+    throw new Error('certificate.json is missing metadata');
+  }
+
+  const ed25519 = parseAwsCertificateChain(
+    parsed.eD25519,
+    metadata.devicePrivKeyEd25519,
+    SIDEWALK_ED25519_PUB_SIZE,
+    'Ed25519'
+  );
+  const p256r1 = parseAwsCertificateChain(
+    parsed.p256R1,
+    metadata.devicePrivKeyP256R1,
+    SIDEWALK_P256R1_PUB_SIZE,
+    'P256r1',
+    true
+  );
+
+  const applicationServerPublicKeyHex =
+    typeof parsed.applicationServerPublicKey === 'string'
+      ? parsed.applicationServerPublicKey
+      : parsed.ApplicationServerPublicKey;
+
+  if (typeof applicationServerPublicKeyHex !== 'string' || applicationServerPublicKeyHex.length === 0) {
+    throw new Error('certificate.json is missing applicationServerPublicKey');
+  }
+
+  const fields = [
+    [4, hexToBytes(metadata.smsn, 'metadata.smsn')],
+    [38, utf8Encoder.encode(resolveAwsCertificateApid(parsed))],
+    [5, hexToBytes(applicationServerPublicKeyHex, 'applicationServerPublicKey')],
+    [6, ed25519.devicePrk],
+    [7, ed25519.devicePub],
+    [8, ed25519.deviceSig],
+    [9, p256r1.devicePrk],
+    [10, p256r1.devicePub],
+    [11, p256r1.deviceSig],
+    [12, ed25519.dakPub],
+    [13, ed25519.dakSig],
+    [14, ed25519.dakSerial],
+    [15, p256r1.dakPub],
+    [16, p256r1.dakSig],
+    [17, p256r1.dakSerial],
+    [18, ed25519.productPub],
+    [19, ed25519.productSig],
+    [20, ed25519.productSerial],
+    [21, p256r1.productPub],
+    [22, p256r1.productSig],
+    [23, p256r1.productSerial],
+    [24, ed25519.manPub],
+    [25, ed25519.manSig],
+    [26, ed25519.manSerial],
+    [27, p256r1.manPub],
+    [28, p256r1.manSig],
+    [29, p256r1.manSerial],
+    [30, ed25519.swPub],
+    [31, ed25519.swSig],
+    [32, ed25519.swSerial],
+    [33, p256r1.swPub],
+    [34, p256r1.swSig],
+    [35, p256r1.swSerial],
+    [36, ed25519.rootPub],
+    [37, p256r1.rootPub],
+  ].sort((left, right) => left[0] - right[0]);
+
+  const fixedHeader = new Uint8Array([
+    0x53, 0x49, 0x44, 0x30,
+    0x00, 0x00, 0x00, SIDEWALK_MFG_TLV_VERSION,
+  ]);
+
+  return concatUint8Arrays([
+    fixedHeader,
+    ...fields.map(([tag, valueBytes]) => buildSidewalkTlv(tag, valueBytes)),
+  ]);
+}
+
 function parseUf2(bytes) {
   if (bytes.length % UF2_BLOCK_SIZE !== 0) {
     throw new Error('Firmware file is not a valid UF2: unexpected file length');
@@ -1498,6 +1713,12 @@ async function mergeSidewalkCredentialIntoUf2(baseUf2Bytes, credentialSource) {
   let byteMap;
   if (credentialSource.format === 'hex' || credentialSource.name.toLowerCase().endsWith('.hex')) {
     byteMap = parseIntelHex(await readAssetText(credentialSource));
+  } else if (credentialSource.format === 'json' || credentialSource.name.toLowerCase().endsWith('.json')) {
+    const credentialBytes = encodeAwsCertificateJsonToSidewalkBinary(await readAssetText(credentialSource));
+    byteMap = new Map();
+    credentialBytes.forEach((value, index) => {
+      byteMap.set(SIDEWALK_MFG_OFFSET + index, value);
+    });
   } else {
     const bytes = await readAssetBytes(credentialSource);
     byteMap = new Map();

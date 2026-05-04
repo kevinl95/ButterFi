@@ -2,6 +2,10 @@
 
 This document defines the browser-side batch provisioning workflow for the Seeed XIAO nRF52840 ButterFi path.
 
+This is an optional advanced flow for multi-device rollout. The primary
+self-hosted owner setup path is documented in
+[docs/self-hosted-owner-setup.md](./self-hosted-owner-setup.md).
+
 ## Operator Goal
 
 The target operator is an IT staff member or teacher who is comfortable plugging boards in and following a web UI, but is not expected to use Zephyr, `nrfjprog`, or raw Sidewalk tooling.
@@ -81,6 +85,7 @@ Each item in `devices` can provide:
 
 The embedded credential can be either:
 
+- `format: "json"` with `content_base64` or text representing the original AWS `certificate.json`
 - `format: "hex"` with `content_base64` representing the original Intel HEX file text
 - `format: "bin"` with `content_base64` representing raw bytes to be written at `mfg_storage`
 
@@ -100,6 +105,47 @@ When a batch package is loaded, the browser:
 ## Current Limitation
 
 The browser tracks batch completion only in local storage. If the operator switches browsers or machines, the queue state does not automatically follow them unless that state is also tracked by a backend system.
+
+## Converting AWS Exports Into Credential Assets
+
+For single-device manual flashing, the browser can consume raw AWS
+`certificate.json` directly. For batch packaging, CLI-only export paths, or
+offline asset generation, you can still pre-convert AWS exports into `.hex` or
+`.bin` files.
+
+This repo includes [scripts/build-sidewalk-credential.py](../scripts/build-sidewalk-credential.py),
+which wraps the official Sidewalk SDK provisioner and forces the ButterFi XIAO
+`mfg_storage` address from [firmware/xiao_nrf52840/pm_static.yml](../firmware/xiao_nrf52840/pm_static.yml).
+
+The wrapper runs the official Sidewalk SDK provisioner with your current Python
+environment. If that environment is missing `yaml` or `intelhex`, install the
+SDK tool dependencies from `SIDEWALK_BASE/tools/provision/requirements.txt`.
+
+If you downloaded a combined `certificate.json` from the AWS IoT console:
+
+```bash
+python3 scripts/build-sidewalk-credential.py \
+  --certificate-json provisioning/aws/204-001/certificate.json \
+  --basename 204-001 \
+  --output-dir provisioning/credentials
+```
+
+If you are working from AWS CLI exports instead:
+
+```bash
+python3 scripts/build-sidewalk-credential.py \
+  --wireless-device-json provisioning/aws/204-001/wireless_device.json \
+  --device-profile-json provisioning/aws/device_profile.json \
+  --basename 204-001 \
+  --output-dir provisioning/credentials
+```
+
+Each command produces:
+
+- `provisioning/credentials/204-001.bin`
+- `provisioning/credentials/204-001.hex`
+
+Either file can be uploaded in [web/provision.html](../web/provision.html) or referenced as `credential_path` when building a batch package.
 
 ## Admin Packaging Script
 
@@ -122,13 +168,14 @@ CSV manifests should include these columns:
 
 - `device_id`
 - `device_name`
-- `credential_path`
+- `credential_path` to a raw `certificate.json` file or a converted `.hex` or `.bin` file
 - optional `school_id`
 - optional `content_pkg`
 
-## Backend Guidance
+## Packaging Guidance
 
-The batch package should be produced by a backend or admin workflow, not by school staff. That service should:
+The batch package should be produced by a manufacturing, admin, or backend
+workflow, not by school staff. That workflow should:
 
 1. Choose a shared release UF2 for the rollout.
 2. Generate or import one Sidewalk credential package per device.

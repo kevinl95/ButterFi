@@ -117,10 +117,10 @@ sends the framed ButterFi status request and decodes any returned frames.
 
 ```
 src/
-   main.c              — Sidewalk init, event loop, LED thread
+   main.c              — Sidewalk init, USB request handling, chunk forwarding, LED thread
    butterfi_config.c/h — NVS-backed config storage
    butterfi_usb.c/h    — USB CDC provisioning protocol
-   butterfi_content.c/h— Sidewalk content handler surface
+   butterfi_content.c/h— legacy Sidewalk content scaffold (current transport lives in main.c)
 CMakeLists.txt
 prj.conf              — Kconfig options
 ```

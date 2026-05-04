@@ -23,6 +23,8 @@ def infer_format(path: Path) -> str:
         return "uf2"
     if suffix == ".hex":
         return "hex"
+    if suffix == ".json":
+        return "json"
     return "bin"
 
 
@@ -149,7 +151,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--manifest",
         required=True,
-        help="Path to device manifest (.csv or .json) with device_id, device_name, school_id, content_pkg, credential_path",
+        help=(
+            "Path to device manifest (.csv or .json) with device_id, device_name, "
+            "school_id, content_pkg, credential_path. credential_path should point "
+            "to a raw certificate.json or a .hex/.bin credential asset, such as the "
+            "output of scripts/build-sidewalk-credential.py"
+        ),
     )
     parser.add_argument("--output", required=True, help="Path to write the batch JSON")
     parser.add_argument("--batch-id", required=True, help="Stable batch identifier used for browser-side progress tracking")

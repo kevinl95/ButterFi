@@ -1,8 +1,9 @@
 # ButterFi
 
-ButterFi is a Sidewalk-to-web bridge for constrained student devices. This repo
-now centers on the Seeed XIAO nRF52840 firmware track, the browser tools around
-it, and the AWS backend that serves chunked text responses over Amazon Sidewalk.
+ButterFi is a self-hosted Sidewalk-to-web bridge for constrained student
+devices. This repo now centers on the Seeed XIAO nRF52840 firmware track, the
+browser tools around it, and the AWS backend that each owner deploys in their
+own AWS account to serve chunked text responses over Amazon Sidewalk.
 
 ## Architecture
 
@@ -36,6 +37,17 @@ Chromebook ←WebSerial→ ButterFi Dongle ←Sidewalk→ Neighbor's Echo ←Int
 - Browser console for the runtime device protocol: [web/](web)
 - Browser provisioning and web-flash prototype: [web/provision.html](web/provision.html)
 - Cloud stack: [template.yaml](template.yaml)
+
+## Ownership Model
+
+ButterFi is intended to be buyer-owned and self-hosted. A buyer can purchase a
+XIAO module or kit, deploy [template.yaml](template.yaml) into their own AWS
+account, register their own Sidewalk device, and use the browser provisioning
+page to flash a prebuilt UF2 plus their device credential. This repo does not
+assume a shared ButterFi-operated backend.
+
+The concrete owner workflow is documented in
+[docs/self-hosted-owner-setup.md](docs/self-hosted-owner-setup.md).
 
 ## Protocol Contract
 
@@ -97,9 +109,13 @@ For quick post-flash USB sanity checks, the firmware guide also documents two op
 The browser-side tools live in [web/README.md](web/README.md). There are currently two entry points:
 
 - [web/index.html](web/index.html): runtime serial console for the binary ButterFi protocol
-- [web/provision.html](web/provision.html): XIAO provisioning and web-flash prototype, now with classroom batch-package support and post-flash runtime config save over USB serial
+- [web/provision.html](web/provision.html): XIAO provisioning and web-flash prototype, with single-device self-hosted setup, optional batch-package support, and post-flash runtime config save over USB serial
 
 ## Deploy
+
+For the buyer-owned setup flow, start with
+[docs/self-hosted-owner-setup.md](docs/self-hosted-owner-setup.md). The CLI
+example below deploys the same template directly.
 
 ```bash
 # Prerequisites: AWS CLI configured with us-east-1 credentials
