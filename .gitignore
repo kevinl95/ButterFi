@@ -35,3 +35,6 @@ coverage/
 /firmware/xiao_nrf52840/build*/
 /firmware/xiao_nrf52840/.sdk-layout/
 artifacts/*
+
+# Sidewalk device credentials (private key material) - never commit these
+/provisioning/

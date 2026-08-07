@@ -53,8 +53,4 @@ target_sources(app PRIVATE
     src/butterfi_usb.c
 )
 
-if(BUTTERFI_INCLUDE_SIDEWALK)
-    target_sources(app PRIVATE src/butterfi_content.c)
-endif()
-
 target_include_directories(app PRIVATE src)

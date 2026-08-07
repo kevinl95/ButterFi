@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ButterFi Browse</title>
+    <meta name="theme-color" content="#126a52">
+    <meta name="description" content="Browse a text-only version of the web over a ButterFi Sidewalk device.">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icons/icon-any.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero">
+            <div>
+                <p class="eyebrow">ButterFi</p>
+                <h1>Browse</h1>
+                <p class="hero-copy">
+                    Connect your ButterFi dongle, then type a web address or a search
+                    in the bar below to read a page.
+                </p>
+            </div>
+            <div class="hero-note">
+                <p id="support-indicator">Checking browser support…</p>
+                <div class="install-row">
+                    <button id="connect-button" class="button button-small button-primary">Connect device</button>
+                    <button id="disconnect-button" class="button button-small" disabled>Disconnect</button>
+                    <span id="connection-badge" class="pill pill-muted">Disconnected</span>
+                </div>
+                <div class="install-row">
+                    <button id="install-button" class="button button-small" hidden>Install app</button>
+                    <span id="install-status" class="install-status">Install unavailable</span>
+                </div>
+                <p class="helper-text"><a href="./index.html">Open the technical console</a></p>
+            </div>
+        </header>
+
+        <main class="browse-shell">
+            <div class="address-row">
+                <button id="back-button" class="button button-small" disabled title="Back" aria-label="Back">&larr;</button>
+                <input
+                    id="address-input"
+                    class="address-input"
+                    type="text"
+                    placeholder="Type a web address or search…"
+                    autocomplete="off"
+                    disabled
+                >
+                <button id="go-button" class="button button-primary" disabled>Go</button>
+            </div>
+
+            <div class="browse-status-row">
+                <span id="device-state-pill" class="pill pill-muted">Not connected</span>
+                <span id="browse-progress" class="helper-text"></span>
+            </div>
+
+            <section class="panel page-panel">
+                <div id="page-content" class="page-content">
+                    <p class="page-placeholder">
+                        Connect a device, then type a web address or search above and press Go.
+                    </p>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script type="module" src="./browse.js"></script>
+</body>
+</html>

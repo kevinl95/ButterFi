@@ -317,6 +317,21 @@ int butterfi_usb_send_config_saved(uint8_t request_id, const char *message)
                       0);
 }
 
+int butterfi_usb_send_mfg_write_ok(uint8_t request_id, const char *message)
+{
+    size_t message_len = 0;
+
+    if (message != NULL) {
+        message_len = strnlen(message, BUTTERFI_USB_MAX_PAYLOAD);
+    }
+
+    return send_frame(BUTTERFI_USB_FRAME_DEVICE_MFG_WRITE_OK,
+                      request_id,
+                      (const uint8_t *)message,
+                      (uint16_t)message_len,
+                      0);
+}
+
 static void maybe_emit_status_on_dtr(void)
 {
     uint32_t dtr = 0;

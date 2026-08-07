@@ -617,7 +617,7 @@
   <!-- PANEL 2: Flash -->
   <div class="panel" id="panel-flash">
     <h1>Flash the dongle</h1>
-    <p class="subtitle">The browser writes audit files first, then copies the release UF2. If a Sidewalk credential package was selected, it is merged into the UF2 before the final write.</p>
+    <p class="subtitle">The browser writes audit files first, then copies the release UF2. If a Sidewalk credential package was selected, it is written to mfg_storage over the runtime serial port in the next step, after the board reboots into the new firmware.</p>
 
     <div class="instruction-box">
       <p><span class="step-num">1</span> Plug your XIAO into USB.</p>
@@ -693,13 +693,8 @@ let runtimeProvisionRequestCounter = 1;
 const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
 
-const UF2_BLOCK_SIZE = 512;
-const UF2_MAGIC_START0 = 0x0A324655;
-const UF2_MAGIC_START1 = 0x9E5D5157;
-const UF2_MAGIC_END = 0x0AB16F30;
-const UF2_FLAG_FAMILY_ID_PRESENT = 0x00002000;
-const DEFAULT_UF2_PAYLOAD_SIZE = 256;
 const SIDEWALK_MFG_OFFSET = 0xEB000;
+const SIDEWALK_MFG_SIZE = 0x1000;
 const BATCH_PACKAGE_FORMAT = 'butterfi-batch-v1';
 const BATCH_PROGRESS_KEY_PREFIX = 'butterfi-batch-progress:';
 const SIDEWALK_MFG_TLV_VERSION = 8;
@@ -718,12 +713,20 @@ const USB = {
   version: 0x01,
   frameHostStatusRequest: 0x05,
   frameHostConfigSave: 0x06,
+  frameHostMfgWrite: 0x07,
   frameDeviceStatus: 0x81,
+  frameDeviceUplinkAccepted: 0x82,
   frameDeviceTransferError: 0x85,
   frameDeviceDebugText: 0x87,
   frameDeviceConfigSaved: 0x88,
+  frameDeviceMfgWriteOk: 0x89,
   maxPayload: 512,
 };
+
+// mfg write frames carry a 2-byte offset + 2-byte total length ahead of the
+// chunk data itself (see docs/shared-protocol.md, "Host Mfg Write Payload").
+const MFG_WRITE_HEADER_SIZE = 4;
+const MFG_WRITE_CHUNK_SIZE = USB.maxPayload - MFG_WRITE_HEADER_SIZE;
 
 const runtimeDeviceStateLabels = {
   0: 'Idle',
@@ -750,6 +753,7 @@ const runtimeErrorCodeLabels = {
   0x05: 'Transfer timed out',
   0x06: 'Protocol mismatch',
   0x07: 'Config save failed',
+  0x08: 'Mfg write failed',
 };
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
@@ -1312,13 +1316,13 @@ function configToJsonBytes(cfg) {
   return utf8Encoder.encode(JSON.stringify(cfg, null, 2));
 }
 
-function buildProvisioningManifest(cfg, credentialMerged) {
+function buildProvisioningManifest(cfg, credentialPending) {
   return {
     generated_at: new Date().toISOString(),
     firmware_name: cfg.firmware_name,
     sidewalk_credential_name: cfg.sidewalk_credential_name,
-    sidewalk_credential_merged: credentialMerged,
-    sidewalk_credential_address: credentialMerged ? `0x${SIDEWALK_MFG_OFFSET.toString(16)}` : null,
+    sidewalk_credential_pending: credentialPending,
+    sidewalk_credential_address: credentialPending ? `0x${SIDEWALK_MFG_OFFSET.toString(16)}` : null,
     batch: activeBatchPackage
       ? {
           batch_id: activeBatchPackage.batchId,
@@ -1331,10 +1335,10 @@ function buildProvisioningManifest(cfg, credentialMerged) {
     config: cfg,
     notes: [
       'The browser provisioning flow writes the selected UF2 to the XIAO bootloader drive.',
-      credentialMerged
-        ? 'A Sidewalk credential package was merged into the UF2 at the mfg_storage partition.'
+      credentialPending
+        ? 'A Sidewalk credential package is queued to be written to mfg_storage over the runtime USB serial protocol once the board boots the new firmware.'
         : 'No Sidewalk credential package was selected; the device will remain Sidewalk not registered.',
-      'After the UF2 flash, the browser reconnects over the ButterFi runtime serial port and saves school_id, device_name, and content_pkg into NVS.',
+      'After the UF2 flash, the browser reconnects over the ButterFi runtime serial port, writes the pending Sidewalk credential (if any), then saves school_id, device_name, and content_pkg into NVS.',
       activeBatchPackage
         ? 'The operator loaded a batch package and the browser tracked device progress locally.'
         : 'The operator used manual single-device mode.',
@@ -1566,39 +1570,6 @@ function encodeAwsCertificateJsonToSidewalkBinary(text) {
   ]);
 }
 
-function parseUf2(bytes) {
-  if (bytes.length % UF2_BLOCK_SIZE !== 0) {
-    throw new Error('Firmware file is not a valid UF2: unexpected file length');
-  }
-
-  const blocks = [];
-  for (let offset = 0; offset < bytes.length; offset += UF2_BLOCK_SIZE) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset + offset, UF2_BLOCK_SIZE);
-    const magic0 = view.getUint32(0, true);
-    const magic1 = view.getUint32(4, true);
-    const magicEnd = view.getUint32(508, true);
-
-    if (magic0 !== UF2_MAGIC_START0 || magic1 !== UF2_MAGIC_START1 || magicEnd !== UF2_MAGIC_END) {
-      throw new Error('Firmware file is not a valid UF2 block stream');
-    }
-
-    const payloadSize = view.getUint32(16, true);
-    if (payloadSize <= 0 || payloadSize > 476) {
-      throw new Error(`Unsupported UF2 payload size: ${payloadSize}`);
-    }
-
-    blocks.push({
-      flags: view.getUint32(8, true),
-      targetAddr: view.getUint32(12, true),
-      payloadSize,
-      familyId: view.getUint32(28, true),
-      payload: bytes.slice(offset + 32, offset + 32 + payloadSize),
-    });
-  }
-
-  return blocks;
-}
-
 function parseIntelHex(text) {
   const byteMap = new Map();
   let linearBase = 0;
@@ -1658,81 +1629,31 @@ function parseIntelHex(text) {
   return byteMap;
 }
 
-function buildCredentialBlocks(byteMap, payloadSize, flags, familyId) {
-  const grouped = new Map();
-  const addresses = Array.from(byteMap.keys()).sort((left, right) => left - right);
-
-  for (const address of addresses) {
-    const blockAddress = Math.floor(address / payloadSize) * payloadSize;
-    if (!grouped.has(blockAddress)) {
-      const payload = new Uint8Array(payloadSize);
-      payload.fill(0xFF);
-      grouped.set(blockAddress, payload);
-    }
-    grouped.get(blockAddress)[address - blockAddress] = byteMap.get(address);
-  }
-
-  return Array.from(grouped.entries())
-    .sort((left, right) => left[0] - right[0])
-    .map(([targetAddr, payload]) => ({ flags, targetAddr, payloadSize, familyId, payload }));
-}
-
-function encodeUf2(blocks) {
-  const out = new Uint8Array(blocks.length * UF2_BLOCK_SIZE);
-
-  blocks.forEach((block, index) => {
-    const offset = index * UF2_BLOCK_SIZE;
-    const view = new DataView(out.buffer, offset, UF2_BLOCK_SIZE);
-
-    view.setUint32(0, UF2_MAGIC_START0, true);
-    view.setUint32(4, UF2_MAGIC_START1, true);
-    view.setUint32(8, block.flags, true);
-    view.setUint32(12, block.targetAddr, true);
-    view.setUint32(16, block.payloadSize, true);
-    view.setUint32(20, index, true);
-    view.setUint32(24, blocks.length, true);
-    view.setUint32(28, block.familyId, true);
-    out.set(block.payload, offset + 32);
-    view.setUint32(508, UF2_MAGIC_END, true);
-  });
-
-  return out;
-}
-
-async function mergeSidewalkCredentialIntoUf2(baseUf2Bytes, credentialSource) {
-  const blocks = parseUf2(baseUf2Bytes);
-  if (blocks.length === 0) {
-    throw new Error('Firmware file did not contain any UF2 blocks');
-  }
-
-  const firstBlock = blocks[0];
-  const payloadSize = firstBlock.payloadSize || DEFAULT_UF2_PAYLOAD_SIZE;
-  const flags = firstBlock.flags || UF2_FLAG_FAMILY_ID_PRESENT;
-  const familyId = firstBlock.familyId || 0;
-
-  let byteMap;
+// The UF2 bootloader on this hardware only accepts writes to its single
+// known app region and silently ignores blocks targeting any other address
+// (see docs/hardware-validation-checklist.md), so the Sidewalk credential
+// can't be merged into the UF2 and drag-and-dropped like the app image.
+// Instead we resolve it to a flat byte array here and write it over the
+// runtime USB serial protocol after the base UF2 has booted (frame 0x07,
+// see docs/shared-protocol.md).
+async function resolveCredentialFlatBytes(credentialSource) {
   if (credentialSource.format === 'hex' || credentialSource.name.toLowerCase().endsWith('.hex')) {
-    byteMap = parseIntelHex(await readAssetText(credentialSource));
-  } else if (credentialSource.format === 'json' || credentialSource.name.toLowerCase().endsWith('.json')) {
-    const credentialBytes = encodeAwsCertificateJsonToSidewalkBinary(await readAssetText(credentialSource));
-    byteMap = new Map();
-    credentialBytes.forEach((value, index) => {
-      byteMap.set(SIDEWALK_MFG_OFFSET + index, value);
+    const byteMap = parseIntelHex(await readAssetText(credentialSource));
+    const addresses = Array.from(byteMap.keys());
+    const minAddr = Math.min(...addresses);
+    const maxAddr = Math.max(...addresses);
+    const flat = new Uint8Array(maxAddr - minAddr + 1).fill(0xFF);
+    byteMap.forEach((value, address) => {
+      flat[address - minAddr] = value;
     });
-  } else {
-    const bytes = await readAssetBytes(credentialSource);
-    byteMap = new Map();
-    bytes.forEach((value, index) => {
-      byteMap.set(SIDEWALK_MFG_OFFSET + index, value);
-    });
+    return flat;
   }
 
-  const credentialBlocks = buildCredentialBlocks(byteMap, payloadSize, flags, familyId);
-  if (credentialBlocks.length === 0) {
-    throw new Error('Credential package did not produce any UF2 blocks');
+  if (credentialSource.format === 'json' || credentialSource.name.toLowerCase().endsWith('.json')) {
+    return encodeAwsCertificateJsonToSidewalkBinary(await readAssetText(credentialSource));
   }
 
-  return encodeUf2(blocks.concat(credentialBlocks));
+  return readAssetBytes(credentialSource);
 }
 
 async function writeFileToDirectory(dirHandle, fileName, bytes, type) {
@@ -1849,11 +1770,12 @@ function hideRuntimeProvisioningPrompt() {
   setRuntimeConfigStatus('Waiting for flash to finish…', '');
 }
 
-function showRuntimeProvisioningPrompt(cfg, credentialMerged) {
-  pendingRuntimeProvisioning = { cfg, credentialMerged };
+function showRuntimeProvisioningPrompt(cfg, credentialBytes) {
+  pendingRuntimeProvisioning = { cfg, credentialBytes };
   document.getElementById('runtime-config-section').style.display = 'block';
-  document.getElementById('runtime-config-help').textContent =
-    `Flash complete for "${cfg.device_name}". After the board reboots into ButterFi, connect the runtime serial port to save school_id, device_name, and content_pkg into NVS.`;
+  document.getElementById('runtime-config-help').textContent = credentialBytes
+    ? `Flash complete for "${cfg.device_name}". After the board reboots into ButterFi, connect the runtime serial port to write the Sidewalk credential and save school_id, device_name, and content_pkg into NVS.`
+    : `Flash complete for "${cfg.device_name}". After the board reboots into ButterFi, connect the runtime serial port to save school_id, device_name, and content_pkg into NVS.`;
 
   if (!navigator.serial) {
     document.getElementById('btn-runtime-config').disabled = true;
@@ -1883,8 +1805,7 @@ function formatRuntimePortInfo(port) {
   return `USB ${vendor}:${product}`;
 }
 
-async function openRuntimeSerialSession() {
-  const port = await navigator.serial.requestPort();
+async function openRuntimeSerialPort(port) {
   await port.open({ baudRate: 115200, bufferSize: 4096 });
 
   if (typeof port.setSignals === 'function') {
@@ -1901,6 +1822,46 @@ async function openRuntimeSerialSession() {
     writer: port.writable.getWriter(),
     parser: new ButterfiFrameParser(),
   };
+}
+
+// Prompts the picker for a port. Only needed for the first connection in a
+// flow — reconnecting to the same port after a device-triggered reboot
+// (e.g. after a mfg write) should reuse the already-authorized port object
+// via reopenRuntimeSerialSession() instead, since requestPort() always
+// shows the picker again.
+async function openRuntimeSerialSession() {
+  const port = await navigator.serial.requestPort();
+  return openRuntimeSerialPort(port);
+}
+
+// Reopens a port the user already authorized this flow, after the device
+// closed the connection on its own (e.g. rebooting after a mfg write).
+// Retries for a few seconds since the board takes a moment to re-enumerate.
+async function reopenRuntimeSerialSession(previousPort, onProgress, { retries = 50, delayMs = 500 } = {}) {
+  // A full USB disconnect/reconnect (as happens on reboot) can mean the
+  // previously-authorized SerialPort object never becomes openable again on
+  // some platforms. Re-resolve it from the already-granted port list each
+  // attempt instead of blindly retrying .open() on the stale object.
+  const previousInfo = previousPort.getInfo();
+  let lastError;
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const authorizedPorts = await navigator.serial.getPorts();
+      const match = authorizedPorts.find((candidate) => {
+        const info = candidate.getInfo();
+        return info.usbVendorId === previousInfo.usbVendorId && info.usbProductId === previousInfo.usbProductId;
+      }) || previousPort;
+
+      return await openRuntimeSerialPort(match);
+    } catch (error) {
+      lastError = error;
+      onProgress?.(attempt + 1, retries);
+      await sleep(delayMs);
+    }
+  }
+
+  throw new Error(`Could not reconnect to the ButterFi runtime port after reboot: ${lastError?.message || 'unknown error'}`);
 }
 
 async function closeRuntimeSerialSession(session) {
@@ -1996,13 +1957,62 @@ async function waitForRuntimeFrame(session, predicate, timeoutMs) {
   }
 }
 
+// Writes the Sidewalk credential to mfg_storage over the runtime USB
+// protocol (frame 0x07, chunked — see docs/shared-protocol.md). On success
+// the device reboots immediately so Sidewalk re-reads the manufacturing
+// page, which closes the serial session out from under us; the caller is
+// responsible for reconnecting afterward.
+async function writeMfgCredentialOverSerial(session, credentialBytes, onProgress) {
+  if (credentialBytes.length > SIDEWALK_MFG_SIZE) {
+    throw new Error(`Credential is ${credentialBytes.length} bytes, larger than the ${SIDEWALK_MFG_SIZE}-byte mfg_storage partition`);
+  }
+
+  const requestId = nextRuntimeProvisionRequestId();
+  const total = credentialBytes.length;
+
+  for (let offset = 0; offset < total; offset += MFG_WRITE_CHUNK_SIZE) {
+    const chunk = credentialBytes.slice(offset, offset + MFG_WRITE_CHUNK_SIZE);
+    const payload = new Uint8Array(MFG_WRITE_HEADER_SIZE + chunk.length);
+    payload[0] = offset & 0xff;
+    payload[1] = (offset >> 8) & 0xff;
+    payload[2] = total & 0xff;
+    payload[3] = (total >> 8) & 0xff;
+    payload.set(chunk, MFG_WRITE_HEADER_SIZE);
+
+    const isFinalChunk = offset + chunk.length >= total;
+    await writeRuntimeFrame(session, USB.frameHostMfgWrite, requestId, payload);
+    onProgress?.(offset + chunk.length, total);
+
+    const resultFrame = await waitForRuntimeFrame(
+      session,
+      frame => frame.requestId === requestId && (
+        frame.frameType === USB.frameDeviceUplinkAccepted ||
+        frame.frameType === USB.frameDeviceMfgWriteOk ||
+        frame.frameType === USB.frameDeviceTransferError
+      ),
+      10000
+    );
+
+    if (resultFrame.frameType === USB.frameDeviceTransferError) {
+      const errorCode = resultFrame.payload[0] ?? 0;
+      const detail = resultFrame.payload.length > 1 ? utf8Decoder.decode(resultFrame.payload.slice(1)) : '';
+      const label = runtimeErrorCodeLabels[errorCode] || `Error ${errorCode}`;
+      throw new Error(detail ? `${label}: ${detail}` : label);
+    }
+
+    if (isFinalChunk && resultFrame.frameType !== USB.frameDeviceMfgWriteOk) {
+      throw new Error(`Unexpected response finishing mfg write: frame type 0x${resultFrame.frameType.toString(16)}`);
+    }
+  }
+}
+
 async function finishRuntimeProvisioning() {
   if (!pendingRuntimeProvisioning) {
     return;
   }
 
   const button = document.getElementById('btn-runtime-config');
-  const { cfg, credentialMerged } = pendingRuntimeProvisioning;
+  const { cfg, credentialBytes } = pendingRuntimeProvisioning;
   let session = null;
 
   button.disabled = true;
@@ -2016,6 +2026,28 @@ async function finishRuntimeProvisioning() {
     setRuntimeConfigStatus(`Connected to ${portInfo}. Waiting for ButterFi runtime status…`, '');
     await writeRuntimeFrame(session, USB.frameHostStatusRequest, 0);
     await waitForRuntimeFrame(session, frame => frame.frameType === USB.frameDeviceStatus, 8000);
+
+    if (credentialBytes) {
+      setRuntimeConfigStatus(`Writing Sidewalk credential (0 / ${credentialBytes.length} bytes)…`, '');
+      await writeMfgCredentialOverSerial(session, credentialBytes, (sent, total) => {
+        setRuntimeConfigStatus(`Writing Sidewalk credential (${sent} / ${total} bytes)…`, '');
+      });
+      log(`Sidewalk credential written to mfg_storage @ 0x${SIDEWALK_MFG_OFFSET.toString(16)} (${credentialBytes.length} bytes)`);
+
+      setRuntimeConfigStatus('Credential written. Device is rebooting — reconnecting…', '');
+      const port = session.port;
+      await closeRuntimeSerialSession(session);
+      session = null; // avoid a double-close in the outer finally if reopen below fails
+      await sleep(1500);
+      session = await reopenRuntimeSerialSession(port, (attempt, retries) => {
+        setRuntimeConfigStatus(`Device is rebooting — reconnecting (attempt ${attempt}/${retries})…`, '');
+      });
+      log('Reconnected to runtime serial port after credential-write reboot');
+
+      setRuntimeConfigStatus('Reconnected. Waiting for ButterFi runtime status…', '');
+      await writeRuntimeFrame(session, USB.frameHostStatusRequest, 0);
+      await waitForRuntimeFrame(session, frame => frame.frameType === USB.frameDeviceStatus, 8000);
+    }
 
     const requestId = nextRuntimeProvisionRequestId();
     setRuntimeConfigStatus('Writing runtime config into NVS…', '');
@@ -2045,7 +2077,7 @@ async function finishRuntimeProvisioning() {
 
     lastProvisioningResult = {
       cfg,
-      credentialMerged,
+      credentialWritten: Boolean(credentialBytes),
       runtimeConfigSaved: true,
       batchResult: recordBatchProvisioning(cfg),
     };
@@ -2100,19 +2132,18 @@ async function startFlash() {
 
     setStatus('Preparing release UF2…', '');
     setProgress(10);
-    let uf2Bytes = await readAssetBytes(firmwareSource);
-    let credentialMerged = false;
+    const uf2Bytes = await readAssetBytes(firmwareSource);
+    let credentialBytes = null;
 
     if (credentialSource) {
-      setStatus('Merging Sidewalk credential into UF2…', '');
+      setStatus('Reading Sidewalk credential…', '');
       setProgress(30);
-      uf2Bytes = await mergeSidewalkCredentialIntoUf2(uf2Bytes, credentialSource);
-      credentialMerged = true;
-      log(`Merged Sidewalk credential into mfg_storage @ 0x${SIDEWALK_MFG_OFFSET.toString(16)}`);
+      credentialBytes = await resolveCredentialFlatBytes(credentialSource);
+      log(`Sidewalk credential resolved (${credentialBytes.length} bytes); will be written to mfg_storage over runtime serial after reboot`);
     }
 
     const manifestBytes = utf8Encoder.encode(
-      JSON.stringify(buildProvisioningManifest(cfg, credentialMerged), null, 2)
+      JSON.stringify(buildProvisioningManifest(cfg, Boolean(credentialBytes)), null, 2)
     );
 
     setStatus('Writing device config…', '');
@@ -2127,15 +2158,26 @@ async function startFlash() {
     setProgress(65);
 
     setStatus('Writing provisioned UF2…', '');
-    await writeFileToDirectory(selectedDir, firmwareSource.name, uf2Bytes, 'application/octet-stream');
-    log(`UF2 written to drive as ${firmwareSource.name}`);
+    try {
+      await writeFileToDirectory(selectedDir, firmwareSource.name, uf2Bytes, 'application/octet-stream');
+      log(`UF2 written to drive as ${firmwareSource.name}`);
+    } catch (error) {
+      // This UF2 bootloader flashes and reboots as soon as it recognizes a
+      // complete valid image - it does not wait for the write stream to
+      // close or the drive to be ejected. That means the drive can vanish
+      // mid-write, which surfaces here as a write error even though the
+      // flash almost always already succeeded. Treat it as expected rather
+      // than fatal; if the board didn't actually flash, the runtime serial
+      // reconnect below will fail clearly instead.
+      log(`UF2 write stream ended (${error.message}) - this is expected on this bootloader: it flashes and reboots as soon as the image is received, before the browser's write finishes.`);
+    }
     setProgress(80);
 
     setStatus('Verifying…', '');
     await sleep(400);
     setStatus('Flash complete. Finish runtime setup below.', 'ok');
     log('UF2 write complete; waiting for runtime serial provisioning');
-    showRuntimeProvisioningPrompt(cfg, credentialMerged);
+    showRuntimeProvisioningPrompt(cfg, credentialBytes);
   } catch (error) {
     setStatus('Write failed: ' + error.message, 'err');
     log('ERROR: ' + error.message);
@@ -2146,10 +2188,11 @@ async function startFlash() {
 async function simulateFlash(cfg, firmwareSource, credentialSource) {
   const stages = [
     [15, 'Connecting to bootloader…'],
-    [30, credentialSource ? 'Merging Sidewalk credential…' : 'Preparing release UF2…'],
+    [30, 'Preparing release UF2…'],
     [50, 'Writing config payload…'],
     [65, 'Writing provisioning manifest…'],
     [80, 'Writing provisioned UF2…'],
+    [90, credentialSource ? 'Writing Sidewalk credential over runtime serial…' : 'Writing runtime config to NVS…'],
     [95, 'Writing runtime config to NVS…'],
     [100, 'Complete!'],
   ];
@@ -2163,7 +2206,7 @@ async function simulateFlash(cfg, firmwareSource, credentialSource) {
 
   log(`Firmware: ${firmwareSource?.name || 'demo-firmware.uf2'}`);
   if (credentialSource) {
-    log(`Sidewalk credential merged from ${credentialSource.name} into 0x${SIDEWALK_MFG_OFFSET.toString(16)}`);
+    log(`Sidewalk credential from ${credentialSource.name} written to mfg_storage @ 0x${SIDEWALK_MFG_OFFSET.toString(16)} over runtime serial`);
   } else {
     log('No Sidewalk credential package selected');
   }
@@ -2174,7 +2217,7 @@ async function simulateFlash(cfg, firmwareSource, credentialSource) {
 
   lastProvisioningResult = {
     cfg,
-    credentialMerged: Boolean(credentialSource),
+    credentialWritten: Boolean(credentialSource),
     runtimeConfigSaved: true,
     batchResult: recordBatchProvisioning(cfg),
   };
@@ -2186,14 +2229,14 @@ function goToDone() {
   stopScan();
   const result = lastProvisioningResult || {
     cfg: buildConfig(),
-    credentialMerged: Boolean(getSelectedCredentialSource()),
+    credentialWritten: Boolean(getSelectedCredentialSource()),
     batchResult: null,
   };
 
   let message = `"${result.cfg.device_name}" configured for ${result.cfg.school_id}. Runtime config was saved over USB serial.`;
 
-  message += result.credentialMerged
-    ? ' The Sidewalk credential package was merged into the flashed UF2.'
+  message += result.credentialWritten
+    ? ' The Sidewalk credential was written to mfg_storage over the runtime serial protocol.'
     : ' Base firmware was flashed without a Sidewalk credential package.';
 
   if (result.batchResult?.nextDeviceId) {

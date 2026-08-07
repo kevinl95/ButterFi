@@ -25,6 +25,7 @@
 
 #if BUTTERFI_INCLUDE_SIDEWALK
 #include <pm_config.h>
+#include <zephyr/storage/flash_map.h>
 
 #include <sid_api.h>
 #include <sid_error.h>
@@ -120,6 +121,33 @@ static struct sid_time_sync_config default_time_sync_config = {
 };
 
 K_SEM_DEFINE(sidewalk_event_sem, 0, 1);
+
+/* Manufacturing-page (Sidewalk credential) write buffer. The UF2 bootloader
+ * on this hardware only accepts writes to its single known app region, so
+ * mfg_storage cannot be provisioned by merging it into a UF2 (see
+ * docs/hardware-validation-checklist.md). Instead the browser writes it here
+ * over the already-running USB runtime protocol. */
+static uint8_t mfg_write_buffer[PM_MFG_STORAGE_SIZE];
+static uint16_t mfg_write_received_len;
+
+static int write_mfg_storage(const uint8_t *data, size_t len)
+{
+    const struct flash_area *fa;
+    int rc;
+
+    rc = flash_area_open(PM_MFG_STORAGE_ID, &fa);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = flash_area_erase(fa, 0, fa->fa_size);
+    if (rc == 0) {
+        rc = flash_area_write(fa, 0, data, len);
+    }
+
+    flash_area_close(fa);
+    return rc;
+}
 #endif
 
 static const char *sidewalk_unavailable_reason(void)
@@ -356,6 +384,70 @@ static void handle_host_frame(uint8_t frame_type,
         break;
     }
 
+    case BUTTERFI_USB_FRAME_HOST_MFG_WRITE: {
+#if BUTTERFI_INCLUDE_SIDEWALK
+        uint16_t chunk_offset;
+        uint16_t total_len;
+        uint16_t chunk_len;
+
+        if (payload_len < 4) {
+            (void)butterfi_usb_send_transfer_error(request_id,
+                                                   BUTTERFI_USB_ERROR_INVALID_HOST_FRAME,
+                                                   "mfg write frame too short");
+            break;
+        }
+
+        chunk_offset = payload[0] | (payload[1] << 8);
+        total_len = payload[2] | (payload[3] << 8);
+        chunk_len = payload_len - 4;
+
+        if (chunk_offset == 0) {
+            mfg_write_received_len = 0;
+        }
+
+        if (total_len == 0 || total_len > sizeof(mfg_write_buffer) ||
+            chunk_offset != mfg_write_received_len ||
+            (uint32_t)chunk_offset + chunk_len > total_len) {
+            (void)butterfi_usb_send_transfer_error(request_id,
+                                                   BUTTERFI_USB_ERROR_INVALID_HOST_FRAME,
+                                                   "mfg write out of sequence");
+            mfg_write_received_len = 0;
+            break;
+        }
+
+        memcpy(&mfg_write_buffer[chunk_offset], &payload[4], chunk_len);
+        mfg_write_received_len += chunk_len;
+
+        if (mfg_write_received_len < total_len) {
+            (void)butterfi_usb_send_uplink_accepted(request_id);
+            break;
+        }
+
+        mfg_write_received_len = 0;
+
+        if (write_mfg_storage(mfg_write_buffer, total_len) != 0) {
+            (void)butterfi_usb_send_transfer_error(request_id,
+                                                   BUTTERFI_USB_ERROR_MFG_WRITE_FAILED,
+                                                   "flash write failed");
+            break;
+        }
+
+        (void)butterfi_usb_send_mfg_write_ok(request_id, "mfg storage written");
+        LOG_INF("Sidewalk mfg_storage written (%u bytes); rebooting", total_len);
+        /* USB TX is asynchronous (drains from a ring buffer via UART IRQ),
+         * so give the ok frame above time to actually go out over the wire
+         * before resetting - otherwise the host never sees it. */
+        k_msleep(150);
+        sys_reboot(SYS_REBOOT_COLD);
+        break;
+#else
+        (void)butterfi_usb_send_transfer_error(request_id,
+                                               BUTTERFI_USB_ERROR_SIDEWALK_UNAVAILABLE,
+                                               "sidewalk not built in");
+        break;
+#endif
+    }
+
     case BUTTERFI_USB_FRAME_HOST_PING:
         note_usb_tx_result(butterfi_usb_send_pong(request_id, payload, payload_len), "pong");
         break;
@@ -549,9 +641,13 @@ static void on_send_error(sid_error_t error,
                           const struct sid_msg_desc *msg_desc,
                           void *context)
 {
+    char dbg[64];
+
     ARG_UNUSED(context);
 
     LOG_ERR("MSG TX ERR: %d (id=%u)", error, msg_desc->id);
+    (void)snprintk(dbg, sizeof(dbg), "SID send err=%d id=%u", error, msg_desc->id);
+    (void)butterfi_usb_send_debug_text(dbg);
     current_led_state = LED_STATE_CONNECTED;
 
     if (request_in_flight) {
@@ -564,11 +660,23 @@ static void on_send_error(sid_error_t error,
 
 static void on_status_changed(const struct sid_status *status, void *context)
 {
+    char dbg[96];
+
     LOG_INF("Sidewalk status: state=%d, reg=%d, time=%d, link_mask=0x%08x",
             status->state,
             status->detail.registration_status,
             status->detail.time_sync_status,
             status->detail.link_status_mask);
+
+    /* Mirror the Sidewalk status detail out over USB so it can be observed
+     * without a debug probe (the Zephyr console is disabled on this build). */
+    (void)snprintk(dbg, sizeof(dbg),
+                   "SID state=%d reg=%d time=%d linkmask=0x%08x",
+                   status->state,
+                   status->detail.registration_status,
+                   status->detail.time_sync_status,
+                   status->detail.link_status_mask);
+    (void)butterfi_usb_send_debug_text(dbg);
 
     switch (status->state) {
     case SID_STATE_READY:
@@ -655,15 +763,21 @@ static int sidewalk_init(void)
         .qualification_id = 0x0001,
     };
 
-    struct sid_config config = {
-        .link_mask = SID_LINK_TYPE_1,
-        .dev_ch = dev_ch,
-        .callbacks = &sidewalk_callbacks,
-        .link_config = app_get_ble_config(),
-        .sub_ghz_link_config = NULL,
-        .log_config = NULL,
-        .time_sync_config = &default_time_sync_config,
-    };
+    /* The Sidewalk stack retains the pointer passed to sid_init(), so this
+     * config (like the callbacks it references) must live in static storage,
+     * not on sidewalk_init()'s stack — otherwise it is a use-after-scope once
+     * this function returns, which manifests as the stack silently doing
+     * nothing (no crash, no error). Assigned at runtime because
+     * app_get_ble_config() is not a constant initializer. */
+    static struct sid_config config;
+
+    config.link_mask = SID_LINK_TYPE_1;
+    config.dev_ch = dev_ch;
+    config.callbacks = &sidewalk_callbacks;
+    config.link_config = app_get_ble_config();
+    config.sub_ghz_link_config = NULL;
+    config.log_config = NULL;
+    config.time_sync_config = &default_time_sync_config;
 
     ret = sidewalk_platform_init_once();
     if (ret < 0) {
@@ -680,6 +794,35 @@ static int sidewalk_init(void)
     if (err != SID_ERROR_NONE) {
         LOG_ERR("sid_start failed: %d", err);
         return -EFAULT;
+    }
+
+    /* Ask the stack to actively establish and hold a BLE gateway connection.
+     * Without an auto-connect policy the device only passively accepts brief
+     * gateway connections, which drop before time sync / registration can
+     * complete — so it never leaves SID_STATUS_NOT_REGISTERED. This mirrors
+     * the CONFIG_SID_END_DEVICE_AUTO_CONN_REQ path in the Nordic
+     * sid_end_device reference sample. */
+    {
+        enum sid_link_connection_policy conn_policy =
+            SID_LINK_CONNECTION_POLICY_AUTO_CONNECT;
+        struct sid_link_auto_connect_params ac_params = {
+            .link_type = SID_LINK_TYPE_1,
+            .enable = true,
+            .priority = 0,
+            .connection_attempt_timeout_seconds = 30,
+        };
+
+        err = sid_option(sid_handle, SID_OPTION_SET_LINK_CONNECTION_POLICY,
+                         &conn_policy, sizeof(conn_policy));
+        if (err != SID_ERROR_NONE) {
+            LOG_ERR("set connection policy failed: %d", err);
+        }
+
+        err = sid_option(sid_handle, SID_OPTION_SET_LINK_POLICY_AUTO_CONNECT_PARAMS,
+                         &ac_params, sizeof(ac_params));
+        if (err != SID_ERROR_NONE) {
+            LOG_ERR("set auto-connect params failed: %d", err);
+        }
     }
 
     LOG_INF("Sidewalk stack started");

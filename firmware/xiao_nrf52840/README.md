@@ -8,10 +8,15 @@ This directory is now the active firmware track for the repo.
 
 This firmware currently provides:
 
-- USB CDC provisioning path over line-delimited JSON
+- USB CDC-ACM transport using the binary ButterFi frame layer (sync bytes,
+  frame type, request ID, length, checksum — not line-delimited JSON)
+- host query/resend/cancel/status/ping/config-save frames handled end to end
+  in `src/main.c`
+- a BLE-only Sidewalk stack that sends `0x01` query and `0x02` resend
+  uplinks and forwards `0x81` response-chunk downlinks back to the browser
+  as USB frame `0x83`
 - NVS-backed storage for `school_id`, `device_name`, and `content_pkg`
-- Sidewalk initialization skeleton
-- LED state scaffolding
+- RGB LED state and USB diagnostic indicators
 
 The integration notes for the current firmware, browser, and cloud contract are
 in [docs/xiao-integration-notes.md](../../docs/xiao-integration-notes.md).
@@ -19,15 +24,15 @@ in [docs/xiao-integration-notes.md](../../docs/xiao-integration-notes.md).
 ## Runtime Contract
 
 The cloud stack and runtime browser console use the ButterFi binary transport
-documented in [docs/shared-protocol.md](../../docs/shared-protocol.md).
-
-The XIAO firmware directory also contains a USB provisioning path for device
-setup and stored configuration.
+documented in [docs/shared-protocol.md](../../docs/shared-protocol.md). This
+firmware implements that contract directly in `src/main.c` and
+`src/butterfi_usb.c`.
 
 ## What this code does
 
 - Starts a BLE-only Sidewalk stack for the XIAO target
-- Exposes a USB CDC-ACM serial interface for provisioning
+- Exposes a USB CDC-ACM serial interface for the runtime protocol and for
+  provisioning
 - Stores school ID, device name, and content package in NVS flash
 - RGB LED reflects connection state
 

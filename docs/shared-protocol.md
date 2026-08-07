@@ -83,6 +83,7 @@ reads and resynchronize without relying on line-oriented text parsing.
 | `0x04` | Host ping | Optional opaque payload |
 | `0x05` | Host status request | Empty |
 | `0x06` | Host config save | UTF-8 JSON object containing `school_id`, `device_name`, and `content_pkg` |
+| `0x07` | Host mfg write | Chunked write of the Sidewalk manufacturing page into `mfg_storage`. See below. |
 
 ### Device to Browser Frame Types
 
@@ -96,6 +97,7 @@ reads and resynchronize without relying on line-oriented text parsing.
 | `0x86` | Pong | Optional opaque payload |
 | `0x87` | Debug text | UTF-8 debug message |
 | `0x88` | Config saved | Optional UTF-8 success message |
+| `0x89` | Mfg write ok | Optional UTF-8 success message. Device reboots immediately after sending this. |
 
 ### Host Config Save Payload
 
@@ -111,6 +113,32 @@ UF2 flash completes and the runtime firmware has rebooted.
 ```
 
 The firmware parses this object and persists the values into NVS.
+
+### Host Mfg Write Payload
+
+The Sidewalk manufacturing page (`mfg_storage`, 4096 bytes at flash offset
+`0xEB000`) cannot be written by the UF2 bootloader used on this hardware —
+it only accepts writes to its single known application region and silently
+ignores blocks targeting any other address, including `mfg_storage`. The
+browser provisioner therefore writes the credential over the already-running
+runtime USB protocol instead of merging it into the UF2 image.
+
+Frame type `0x07` payload layout:
+
+| Byte | Field | Notes |
+|------|-------|-------|
+| 0..1 | Chunk offset | Little-endian, byte offset within the manufacturing page |
+| 2..3 | Total length | Little-endian, total manufacturing page length in bytes |
+| 4..N | Chunk data | Up to `USB.maxPayload - 4` bytes |
+
+Chunks must arrive in order starting at offset 0 (a chunk with `offset == 0`
+resets any previously buffered chunk state, so a failed upload can simply be
+restarted). The device responds `0x82` (uplink accepted) after each
+non-final chunk, and either `0x89` (mfg write ok) or `0x85` (transfer error,
+code `0x08` on flash failure) after the final chunk. On success the device
+reboots immediately after sending `0x89` so Sidewalk re-reads the
+manufacturing page at boot; the browser must reconnect afterward for any
+further runtime serial steps (such as `0x06` config save).
 
 ### Device Status Payload
 
@@ -136,6 +164,7 @@ Error code registry:
 - `0x05`: transfer timed out
 - `0x06`: protocol mismatch
 - `0x07`: config save failed
+- `0x08`: mfg write failed
 
 ## Implementation Notes
 
@@ -149,3 +178,6 @@ Error code registry:
   frame immediately after the serial session is re-established.
 - The browser provisioner uses frame `0x06` after flashing to persist the
   classroom config into NVS over the runtime CDC ACM interface.
+- The browser provisioner uses frame `0x07` after flashing, before `0x06`, to
+  write the Sidewalk manufacturing page. This causes a device reboot, so the
+  browser reconnects before sending `0x06`.
