@@ -14,6 +14,7 @@ LOG_MODULE_REGISTER(butterfi_config, LOG_LEVEL_INF);
 
 static struct nvs_fs fs;
 static butterfi_config_t active_config;
+static bool nvs_ready;   /* true once nvs_mount() has succeeded */
 
 int butterfi_config_load(void)
 {
@@ -48,6 +49,7 @@ int butterfi_config_load(void)
         LOG_ERR("NVS mount failed: %d", ret);
         return ret;
     }
+    nvs_ready = true;
 
     /* Read each field — if any are missing, treat as unprovisioned */
     ssize_t len;
@@ -117,7 +119,14 @@ int butterfi_config_save(const butterfi_config_t *cfg)
 
 void butterfi_config_clear(void)
 {
+    /* nvs_clear() erases the whole butterfi_storage partition, including
+     * NVS_ID_MAINT_GEN — so a Sidewalk factory reset (the only caller) re-arms
+     * the one-time settings_storage wipe on the next boot. That is intentional:
+     * a factory reset should also drop any stale maintenance state. nvs_clear()
+     * also leaves fs unmounted, so writes fail until reboot — the caller
+     * (on_factory_reset) sys_reboot()s immediately, so that is fine today. */
     nvs_clear(&fs);
+    nvs_ready = false;
     memset(&active_config, 0, sizeof(active_config));
     LOG_WRN("Config cleared");
 }
@@ -130,18 +139,35 @@ int butterfi_config_get_maint_gen(uint32_t *gen)
         return -EINVAL;
     }
 
+    /* Fail closed: if NVS never mounted, an unmounted nvs_read returns
+     * -EACCES, and reporting gen=0 here would run the (unrecordable)
+     * maintenance wipe on every boot forever. Return the error instead so the
+     * caller skips the wipe. */
+    if (!nvs_ready) {
+        return -EIO;
+    }
+
     *gen = 0;
     len = nvs_read(&fs, NVS_ID_MAINT_GEN, gen, sizeof(*gen));
-    if (len == -ENOENT || len <= 0) {
-        *gen = 0;
+    if (len == -ENOENT) {
+        *gen = 0;   /* never written yet — a legitimate 0 */
+        return 0;
+    }
+    if (len != (ssize_t)sizeof(*gen)) {
+        return (len < 0) ? (int)len : -EIO;
     }
     return 0;
 }
 
 int butterfi_config_set_maint_gen(uint32_t gen)
 {
-    int ret = nvs_write(&fs, NVS_ID_MAINT_GEN, &gen, sizeof(gen));
+    int ret;
 
+    if (!nvs_ready) {
+        return -EIO;
+    }
+
+    ret = nvs_write(&fs, NVS_ID_MAINT_GEN, &gen, sizeof(gen));
     return (ret < 0) ? ret : 0;
 }
 

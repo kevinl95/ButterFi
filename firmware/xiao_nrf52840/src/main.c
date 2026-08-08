@@ -124,12 +124,19 @@ static void populate_boot_info(void)
     bool running = (lfstat & CLOCK_LFCLKSTAT_STATE_Msk) != 0U;
     const char *src_str = (src == 0U) ? "RC" : (src == 1U) ? "Xtal"
                         : (src == 2U) ? "Synth" : "?";
+    uint32_t maint_gen = 0;
+    int gen_ret = butterfi_config_get_maint_gen(&maint_gen);
 
+    /* gen should read back as BUTTERFI_SETTINGS_MAINT_GEN on every boot after
+     * the first. gen=0 persisting across boots means the marker is not
+     * sticking (the settings wipe would then re-run each boot). gen=err means
+     * NVS did not mount. */
     (void)snprintk(boot_info, sizeof(boot_info),
-                   "BOOT lfclk=%s,%s SW=%d DBG=%d",
+                   "BOOT lfclk=%s,%s SW=%d DBG=%d gen=%s%u",
                    src_str, running ? "run" : "STOPPED",
                    (int)BUTTERFI_INCLUDE_SIDEWALK,
-                   (int)BUTTERFI_USB_CONTROL_DEBUG);
+                   (int)BUTTERFI_USB_CONTROL_DEBUG,
+                   (gen_ret == 0) ? "" : "err", (gen_ret == 0) ? maint_gen : 0);
 }
 
 static void set_usb_diag_led(uint8_t *slot)
@@ -952,12 +959,13 @@ K_THREAD_DEFINE(led_tid, LED_STACK_SIZE,
                 LED_PRIORITY, 0, 0);
 
 /* ── USB service thread ─────────────────────────────────────────────────── */
-/* 1024 overflowed: the 0x06 config-save path alone puts json_buffer[513] +
- * config structs + the NVS/flash driver + send_frame's frame[~519] on this
- * thread's stack (>2KB), and the query path adds a ~255-byte uplink buffer.
- * With CONFIG_HW_STACK_PROTECTION that overflow was a clean fault, and with no
- * log backend it looked like a silent hang. */
-#define USB_STACK_SIZE 4096
+/* This thread now only emits the 1 Hz status + boot-info frames — it no longer
+ * polls or handles host frames (the main thread is the sole poller). Its peak
+ * is one send_frame (~519B frame buffer) + call overhead, so 1024 is ample.
+ * The big config-save/query buffers that once overflowed 1024 here now live on
+ * the main thread's stack instead (CONFIG_MAIN_STACK_SIZE, bumped to 8192).
+ * THREAD_ANALYZER reports the real high-water marks within 30s of boot. */
+#define USB_STACK_SIZE 1024
 #define USB_PRIORITY   -1
 
 static void usb_thread_fn(void *a, void *b, void *c)
@@ -1034,10 +1042,6 @@ int main(void)
         refresh_usb_status();
     }
 
-    /* Capture the actual LFCLK source + build flags now, for the 0x87 boot
-     * summary the USB thread emits (see populate_boot_info). */
-    populate_boot_info();
-
 #if BUTTERFI_INCLUDE_SIDEWALK
     /* One-time maintenance: earlier firmware mounted butterfi_config's NVS on
      * the DTS storage_partition, which physically overlaps settings_storage
@@ -1045,27 +1049,43 @@ int main(void)
      * store). That left a foreign NVS filesystem inside settings_storage that
      * the Sidewalk NVS still mounts and reads as stale/garbage state. Wipe it
      * once — before sidewalk_init() so Sidewalk mounts a clean store — then
-     * record the generation so this never runs again (and never wipes a
-     * legitimately-registered device on later boots). Runs pre-radio, so no
-     * flash/radio contention here. */
+     * never again. Runs pre-radio, so no flash/radio contention here.
+     *
+     * Fail closed: record the new generation FIRST and verify it stuck; only
+     * then wipe. A wipe we cannot record is a wipe we must not perform — the
+     * alternative is a unit that silently erases the Sidewalk key store on
+     * every boot and can never register. */
     {
         uint32_t maint_gen = 0;
 
-        (void)butterfi_config_get_maint_gen(&maint_gen);
-        if (maint_gen < BUTTERFI_SETTINGS_MAINT_GEN) {
-            const struct flash_area *fa;
+        if (butterfi_config_get_maint_gen(&maint_gen) == 0 &&
+            maint_gen < BUTTERFI_SETTINGS_MAINT_GEN) {
+            uint32_t check = 0;
 
-            if (flash_area_open(PM_SETTINGS_STORAGE_ID, &fa) == 0) {
-                int erase_ret = flash_area_erase(fa, 0, fa->fa_size);
+            if (butterfi_config_set_maint_gen(BUTTERFI_SETTINGS_MAINT_GEN) == 0 &&
+                butterfi_config_get_maint_gen(&check) == 0 &&
+                check == BUTTERFI_SETTINGS_MAINT_GEN) {
+                const struct flash_area *fa;
 
-                flash_area_close(fa);
-                LOG_WRN("Wiped stale settings_storage (gen %u->%u): %d",
-                        maint_gen, BUTTERFI_SETTINGS_MAINT_GEN, erase_ret);
+                if (flash_area_open(PM_SETTINGS_STORAGE_ID, &fa) == 0) {
+                    int erase_ret = flash_area_erase(fa, 0, fa->fa_size);
+
+                    flash_area_close(fa);
+                    LOG_WRN("Wiped stale settings_storage (gen %u->%u): %d",
+                            maint_gen, BUTTERFI_SETTINGS_MAINT_GEN, erase_ret);
+                }
+            } else {
+                LOG_ERR("Skipping settings_storage wipe: cannot persist marker");
             }
-            (void)butterfi_config_set_maint_gen(BUTTERFI_SETTINGS_MAINT_GEN);
         }
     }
 #endif
+
+    /* Capture LFCLK source + build flags + the maintenance generation for the
+     * 0x87 boot summary. Done AFTER the wipe so gen reflects the persisted
+     * marker — if it ever reads back 0 on a later boot, the marker is not
+     * sticking (the fail-open wipe hazard). */
+    populate_boot_info();
 
 #if BUTTERFI_USB_CONTROL_DEBUG
     LOG_WRN("USB control debug build active - Sidewalk startup skipped");
