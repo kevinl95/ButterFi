@@ -20,8 +20,18 @@
 #include <zephyr/fs/nvs.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/sys/reboot.h>
+#include <hal/nrf_clock.h>
 
 #include <string.h>
+#include <stdio.h>
+
+/* Guard against the build-flag footgun: BUTTERFI_USB_CONTROL_DEBUG defaults ON
+ * and its branch in main() precedes the Sidewalk branch, so a build that sets
+ * BUTTERFI_INCLUDE_SIDEWALK=ON but forgets BUTTERFI_USB_CONTROL_DEBUG=OFF
+ * silently produces Sidewalk-free firmware that still enumerates over USB. */
+#if BUTTERFI_USB_CONTROL_DEBUG && BUTTERFI_INCLUDE_SIDEWALK
+#error "Set BUTTERFI_USB_CONTROL_DEBUG=OFF when BUTTERFI_INCLUDE_SIDEWALK=ON; the USB-control-debug branch takes precedence and skips sidewalk_init()."
+#endif
 
 #if BUTTERFI_INCLUDE_SIDEWALK
 #include <pm_config.h>
@@ -94,6 +104,28 @@ static volatile uint8_t usb_rx_error_led_ticks;
 static struct butterfi_usb_diag_counters last_usb_diag_snapshot;
 static volatile uint8_t boot_fingerprint_ticks = 40;
 
+/* One-line boot summary emitted over USB frame 0x87 (empty until populated in
+ * main()). Surfaces the actual LFCLK source — if it reads RC while the build
+ * configures Xtal/50ppm, the crystal isn't running and the controller is
+ * advertising the wrong SCA to the gateway — plus the resolved build flags so
+ * a Sidewalk-free build can't masquerade as a live one. */
+static char boot_info[80];
+
+static void populate_boot_info(void)
+{
+    uint32_t lfstat = NRF_CLOCK->LFCLKSTAT;
+    uint32_t src = (lfstat & CLOCK_LFCLKSTAT_SRC_Msk) >> CLOCK_LFCLKSTAT_SRC_Pos;
+    bool running = (lfstat & CLOCK_LFCLKSTAT_STATE_Msk) != 0U;
+    const char *src_str = (src == 0U) ? "RC" : (src == 1U) ? "Xtal"
+                        : (src == 2U) ? "Synth" : "?";
+
+    (void)snprintk(boot_info, sizeof(boot_info),
+                   "BOOT lfclk=%s,%s SW=%d DBG=%d",
+                   src_str, running ? "run" : "STOPPED",
+                   (int)BUTTERFI_INCLUDE_SIDEWALK,
+                   (int)BUTTERFI_USB_CONTROL_DEBUG);
+}
+
 static void set_usb_diag_led(uint8_t *slot)
 {
     host_frame_led_ticks = 0;
@@ -111,7 +143,10 @@ static struct sid_handle *sid_handle   = NULL;
 #define BUTTERFI_SIDEWALK_MSG_RESEND 0x02
 #define BUTTERFI_SIDEWALK_MSG_ACK 0x03
 #define BUTTERFI_SIDEWALK_MSG_RESPONSE_CHUNK 0x81
-#define BUTTERFI_SIDEWALK_UPLINK_MAX_PAYLOAD 512
+/* Sidewalk BLE caps a single message at 255 bytes; our uplink adds a 2-byte
+ * header (type + request id), so the app payload must stay <= 253. A larger
+ * value would let the stack reject the message rather than our bounds check. */
+#define BUTTERFI_SIDEWALK_UPLINK_MAX_PAYLOAD 253
 
 #define MAX_TIME_SYNC_INTERVALS 4
 static uint16_t default_sync_intervals_h[MAX_TIME_SYNC_INTERVALS] = { 2, 4, 8, 12 };
@@ -911,7 +946,12 @@ K_THREAD_DEFINE(led_tid, LED_STACK_SIZE,
                 LED_PRIORITY, 0, 0);
 
 /* ── USB service thread ─────────────────────────────────────────────────── */
-#define USB_STACK_SIZE 1024
+/* 1024 overflowed: the 0x06 config-save path alone puts json_buffer[513] +
+ * config structs + the NVS/flash driver + send_frame's frame[~519] on this
+ * thread's stack (>2KB), and the query path adds a ~255-byte uplink buffer.
+ * With CONFIG_HW_STACK_PROTECTION that overflow was a clean fault, and with no
+ * log backend it looked like a silent hang. */
+#define USB_STACK_SIZE 4096
 #define USB_PRIORITY   -1
 
 static void usb_thread_fn(void *a, void *b, void *c)
@@ -929,6 +969,9 @@ static void usb_thread_fn(void *a, void *b, void *c)
 
             if (k_uptime_get() >= next_usb_status_ms) {
                 (void)butterfi_usb_send_status();
+                if (boot_info[0] != '\0') {
+                    (void)butterfi_usb_send_debug_text(boot_info);
+                }
                 next_usb_status_ms = k_uptime_get() + 1000;
             }
         }
@@ -979,6 +1022,10 @@ int main(void)
         usb_ready = true;
         refresh_usb_status();
     }
+
+    /* Capture the actual LFCLK source + build flags now, for the 0x87 boot
+     * summary the USB thread emits (see populate_boot_info). */
+    populate_boot_info();
 
 #if BUTTERFI_USB_CONTROL_DEBUG
     LOG_WRN("USB control debug build active - Sidewalk startup skipped");
