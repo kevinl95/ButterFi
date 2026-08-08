@@ -110,6 +110,7 @@ static volatile uint8_t boot_fingerprint_ticks = 40;
  * advertising the wrong SCA to the gateway — plus the resolved build flags so
  * a Sidewalk-free build can't masquerade as a live one. */
 static char boot_info[80];
+static int boot_info_emits_remaining = 20;
 
 static void populate_boot_info(void)
 {
@@ -969,8 +970,12 @@ static void usb_thread_fn(void *a, void *b, void *c)
 
             if (k_uptime_get() >= next_usb_status_ms) {
                 (void)butterfi_usb_send_status();
-                if (boot_info[0] != '\0') {
+                /* Emit the boot summary only for the first ~20s so a watcher
+                 * that attaches shortly after boot still catches it, without
+                 * flooding the debug channel during later protocol tests. */
+                if (boot_info[0] != '\0' && boot_info_emits_remaining > 0) {
                     (void)butterfi_usb_send_debug_text(boot_info);
+                    boot_info_emits_remaining--;
                 }
                 next_usb_status_ms = k_uptime_get() + 1000;
             }
