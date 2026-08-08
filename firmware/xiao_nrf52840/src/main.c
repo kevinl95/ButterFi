@@ -88,6 +88,11 @@ static sidewalk_state_t sidewalk_state = SIDEWALK_STATE_INIT;
 
 #define BUTTERFI_MAX_TRANSFER_CHUNKS 255
 
+/* Bump to force a one-time settings_storage wipe on the next boot (see the
+ * maintenance block in main()). Currently 1: wipe the foreign NVS left behind
+ * when butterfi_config used to share flash with settings_storage. */
+#define BUTTERFI_SETTINGS_MAINT_GEN 1
+
 static bool usb_ready;
 static uint8_t active_request_id;
 static bool request_in_flight;
@@ -964,21 +969,22 @@ static void usb_thread_fn(void *a, void *b, void *c)
     ARG_UNUSED(c);
 
     while (1) {
-        if (usb_ready) {
-            butterfi_usb_poll();
-            poll_usb_diag_counters();
-
-            if (k_uptime_get() >= next_usb_status_ms) {
-                (void)butterfi_usb_send_status();
-                /* Emit the boot summary only for the first ~20s so a watcher
-                 * that attaches shortly after boot still catches it, without
-                 * flooding the debug channel during later protocol tests. */
-                if (boot_info[0] != '\0' && boot_info_emits_remaining > 0) {
-                    (void)butterfi_usb_send_debug_text(boot_info);
-                    boot_info_emits_remaining--;
-                }
-                next_usb_status_ms = k_uptime_get() + 1000;
+        /* NOTE: this thread does NOT call butterfi_usb_poll(). RX parsing and
+         * host-frame handling run only on the main thread (see the Sidewalk
+         * loop / run_usb_control_loop), so there is a single owner of the RX
+         * ring and parser state — and so host frames that issue Sidewalk API
+         * calls run in the same context as sid_process(). This thread only
+         * emits periodic TX (serialized by tx_mutex in butterfi_usb.c). */
+        if (usb_ready && k_uptime_get() >= next_usb_status_ms) {
+            (void)butterfi_usb_send_status();
+            /* Emit the boot summary only for the first ~20s so a watcher that
+             * attaches shortly after boot still catches it, without flooding
+             * the debug channel during later protocol tests. */
+            if (boot_info[0] != '\0' && boot_info_emits_remaining > 0) {
+                (void)butterfi_usb_send_debug_text(boot_info);
+                boot_info_emits_remaining--;
             }
+            next_usb_status_ms = k_uptime_get() + 1000;
         }
 
         k_msleep(20);
@@ -1031,6 +1037,35 @@ int main(void)
     /* Capture the actual LFCLK source + build flags now, for the 0x87 boot
      * summary the USB thread emits (see populate_boot_info). */
     populate_boot_info();
+
+#if BUTTERFI_INCLUDE_SIDEWALK
+    /* One-time maintenance: earlier firmware mounted butterfi_config's NVS on
+     * the DTS storage_partition, which physically overlaps settings_storage
+     * (where the Sidewalk stack persists its registration/time-sync key
+     * store). That left a foreign NVS filesystem inside settings_storage that
+     * the Sidewalk NVS still mounts and reads as stale/garbage state. Wipe it
+     * once — before sidewalk_init() so Sidewalk mounts a clean store — then
+     * record the generation so this never runs again (and never wipes a
+     * legitimately-registered device on later boots). Runs pre-radio, so no
+     * flash/radio contention here. */
+    {
+        uint32_t maint_gen = 0;
+
+        (void)butterfi_config_get_maint_gen(&maint_gen);
+        if (maint_gen < BUTTERFI_SETTINGS_MAINT_GEN) {
+            const struct flash_area *fa;
+
+            if (flash_area_open(PM_SETTINGS_STORAGE_ID, &fa) == 0) {
+                int erase_ret = flash_area_erase(fa, 0, fa->fa_size);
+
+                flash_area_close(fa);
+                LOG_WRN("Wiped stale settings_storage (gen %u->%u): %d",
+                        maint_gen, BUTTERFI_SETTINGS_MAINT_GEN, erase_ret);
+            }
+            (void)butterfi_config_set_maint_gen(BUTTERFI_SETTINGS_MAINT_GEN);
+        }
+    }
+#endif
 
 #if BUTTERFI_USB_CONTROL_DEBUG
     LOG_WRN("USB control debug build active - Sidewalk startup skipped");

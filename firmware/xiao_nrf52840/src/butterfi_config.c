@@ -122,6 +122,29 @@ void butterfi_config_clear(void)
     LOG_WRN("Config cleared");
 }
 
+int butterfi_config_get_maint_gen(uint32_t *gen)
+{
+    ssize_t len;
+
+    if (gen == NULL) {
+        return -EINVAL;
+    }
+
+    *gen = 0;
+    len = nvs_read(&fs, NVS_ID_MAINT_GEN, gen, sizeof(*gen));
+    if (len == -ENOENT || len <= 0) {
+        *gen = 0;
+    }
+    return 0;
+}
+
+int butterfi_config_set_maint_gen(uint32_t gen)
+{
+    int ret = nvs_write(&fs, NVS_ID_MAINT_GEN, &gen, sizeof(gen));
+
+    return (ret < 0) ? ret : 0;
+}
+
 const char *butterfi_config_get_school_id(void)   { return active_config.school_id; }
 const char *butterfi_config_get_device_name(void) { return active_config.device_name; }
 const char *butterfi_config_get_content_pkg(void) { return active_config.content_pkg; }

@@ -43,6 +43,12 @@ static uint8_t rx_ring_buffer[BUTTERFI_USB_RX_RING_SIZE];
 static struct ring_buf rx_ring;
 static uint8_t tx_ring_buffer[BUTTERFI_USB_TX_RING_SIZE];
 static struct ring_buf tx_ring;
+/* Zephyr ring_buf is single-producer/single-consumer, but frames are queued
+ * from multiple threads (the main/sid_process thread emits status + debug
+ * telemetry via the Sidewalk callbacks, the USB thread emits periodic status
+ * and boot info). Serialize every producer so frames can't interleave — this
+ * is the channel the whole diagnostic picture is read from. */
+static K_MUTEX_DEFINE(tx_mutex);
 static struct butterfi_usb_diag_counters usb_diag = {
     .last_tx_result = 0,
     .last_frame_type = 0,
@@ -160,14 +166,16 @@ static int write_bytes(const uint8_t *data, size_t len)
         return -EAGAIN;
     }
 
+    /* Serialize concurrent producers so a whole frame is queued atomically
+     * (the ring is SPSC; the ISR is the single consumer). */
+    k_mutex_lock(&tx_mutex, K_FOREVER);
     queued_len = ring_buf_put(&tx_ring, data, len);
-    if (queued_len < len) {
-        return -ENOSPC;
+    if (queued_len == len) {
+        uart_irq_tx_enable(cdc_dev);
     }
+    k_mutex_unlock(&tx_mutex);
 
-    uart_irq_tx_enable(cdc_dev);
-
-    return 0;
+    return (queued_len < len) ? -ENOSPC : 0;
 }
 
 static int send_frame(uint8_t frame_type,

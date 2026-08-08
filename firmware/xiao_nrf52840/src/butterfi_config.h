@@ -16,6 +16,7 @@
 #define NVS_ID_DEVICE_NAME   2
 #define NVS_ID_CONTENT_PKG   3
 #define NVS_ID_PROVISIONED   4   /* u8: 0=no, 1=yes */
+#define NVS_ID_MAINT_GEN     5   /* u32: one-time-maintenance generation */
 
 #define BUTTERFI_SCHOOL_ID_MAX   32
 #define BUTTERFI_DEVICE_NAME_MAX 48
@@ -43,6 +44,14 @@ int butterfi_config_save(const butterfi_config_t *cfg);
  * Erase all stored config (factory reset).
  */
 void butterfi_config_clear(void);
+
+/**
+ * Read/write the one-time-maintenance generation marker. Used to run a
+ * migration step (e.g. wiping a flash region) exactly once per firmware that
+ * bumps the generation. Returns 0 on success. get sets *gen to 0 if unset.
+ */
+int butterfi_config_get_maint_gen(uint32_t *gen);
+int butterfi_config_set_maint_gen(uint32_t gen);
 
 const char *butterfi_config_get_school_id(void);
 const char *butterfi_config_get_device_name(void);
