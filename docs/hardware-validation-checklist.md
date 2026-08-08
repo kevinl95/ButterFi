@@ -55,6 +55,54 @@ the only reason any of this is observable without an SWD/RTT probe. Decode:
 `reg=1` = NOT_REGISTERED, `time=1` = NO_TIME, `state=1` = NOT_READY,
 `linkmask=0x1` = BLE link up (per `sid_api.h`).
 
+## Third session update (2026-08-07, review-driven)
+
+An external code review surfaced several real bugs; all fixed and verified on
+hardware, but **registration still does not complete** (device stays
+`PROVISIONED`).
+
+- **`0x06` config-save hang = stack overflow, FIXED.** `usb_thread` had a
+  1024-byte stack; the config-save path (`json_buffer[513]` + config structs +
+  NVS/flash driver + `send_frame`'s ~519B frame) blows past it, and with
+  `CONFIG_HW_STACK_PROTECTION=y` + no compiled-in log backend it faulted
+  silently (dark LED). Bumped `USB_STACK_SIZE` to 4096; the device now
+  survives `0x06`. NOTE: config-save still returns no `0x88` while the radio
+  is up (USB thread stays alive, so it's not a crash) — consistent with
+  `nvs_write` blocking on nRF flash/radio timeslot contention. Not on the
+  browsing path; left as a follow-up.
+- **Partition collision, FIXED.** `butterfi_config.c` mounted NVS on the DTS
+  `storage_partition` (`0xEC000`) — the exact flash PM assigns to
+  `settings_storage`, where Sidewalk persists its registration/time-sync keys
+  (`CONFIG_SETTINGS_NVS=y`). `butterfi_config_load()` runs before
+  `sidewalk_init()` and writes NVS sector headers on mount, corrupting the
+  Sidewalk key store every boot. Added a dedicated `butterfi_storage` PM
+  partition at `0xE8000` and repointed `butterfi_config` at it via
+  `PM_BUTTERFI_STORAGE_ID`. After this, the registration signature changed
+  from ~7s link flicker to quiet (plausibly the flicker was the stack
+  thrashing on the corrupted store) — but it still does not register.
+- **LFCLK = cleared, PROVEN.** New `0x87` boot frame reads
+  `NRF_CLOCK->LFCLKSTAT` and reports `lfclk=Xtal,run` — the crystal is present
+  and sourcing LFCLK, so the advertised 50 ppm SCA is accurate and the
+  RC-fallback drift hypothesis does not apply to this unit. (Kept the readout;
+  it's cheap and definitive.)
+- Also: capped the oversized `BUTTERFI_SIDEWALK_UPLINK_MAX_PAYLOAD` (512→253,
+  Sidewalk BLE max msg is 255), added a build-flag `#error`, emitted resolved
+  build flags in the boot frame (`SW=1 DBG=0` confirmed), removed the dead
+  `LOG_BACKED_RPC` typo and the no-op `LOG_PROCESS_THREAD_STACK_SIZE`.
+
+**Still open after all of the above:** Sidewalk registration. The definitive
+next test remains the stock Nordic `sid_end_device` sample on an **nRF52840
+DK** through the same Echo (bisects XIAO-board/provisioning vs
+gateway/Amazon-side). Deferred review follow-ups, in priority order: (1) get
+**RTT** logging up (`CONFIG_USE_SEGGER_RTT` + `CONFIG_LOG_BACKEND_RTT`, XIAO
+exposes SWD pads) — every session here is bottlenecked on not having firmware
+logs; (2) `CONFIG_THREAD_ANALYZER` + `_AUTO` so stack overflows self-report;
+(3) the two-thread `butterfi_usb_poll()` race (both `main` and `usb_thread`
+call it, sharing `rx_ring`/`tx_ring`/parser with no lock — pick one owner);
+(4) resolve the config-save flash/radio blocking; (5) move remaining large
+stack buffers to static; (6) gate the `0x87` boot-info emission (currently
+every 1s, which floods the debug channel during protocol tests).
+
 **Consistent symptom across every change below:** device boots, actively
 attempts BLE, the link comes up (`linkmask=0x1`) then drops in the *same
 second*, `time` stays NO_TIME and `reg` stays NOT_REGISTERED. AWS device
