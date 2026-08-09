@@ -98,13 +98,22 @@ only treats the address symptom anyway. Reverted.
 
 **Where it stands:** the FFN *handshake* fails (post-connection), the RPA churn
 is downstream, and the failure reason is not visible over USB telemetry.
-Everything reachable without more visibility is exhausted. The two remaining
-paths both need one thing we do not have on hand: (1) **RTT** over an SWD probe
-on the XIAO pads — the Sidewalk stack would print the disconnect/handshake
-failure reason directly (the RTT firmware is built and flashed; just attach a
-probe); or (2) **isolation**: stock `sid_end_device` on the XIAO, then a
-Nordic **nRF52840 DK**, to split "our board/provisioning" from "gateway /
-Amazon network".
+Everything reachable without more visibility is exhausted.
+
+Building the stock `sid_end_device` sample **on the XIAO** was attempted and
+abandoned: the sample is DK-only and sysbuild-forces MCUboot, so a XIAO port
+needs SDK Kconfig patches (one malformed `MCUBOOT_FPROTECT...` entry), forcibly
+disabling MCUboot (the XIAO's Adafruit bootloader has no `slot0_partition`),
+and a hand-authored `xiao_ble` overlay for the sample's state-notifier GPIO
+aliases + external flash — a multi-hour port with uncertain payoff.
+
+**Recommended unlock: a Nordic nRF52840 DK (~$50).** It resolves both remaining
+paths cleanly: (1) the sample builds/flashes on it with zero porting
+(`west build -b nrf52840dk`) — run it through the same Echo to split "our XIAO
+board/build" from "credential / gateway / Amazon network"; and (2) its onboard
+J-Link is a full SWD probe — wire it to the XIAO SWD pads and read RTT off the
+XIAO (the RTT firmware is already built/flashed) to get the exact FFN
+disconnect reason. Two answers, one part.
 
 ## Third session update (2026-08-07, review-driven)
 
