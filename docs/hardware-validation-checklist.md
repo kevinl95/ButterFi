@@ -53,7 +53,58 @@ Sidewalk telemetry over USB debug frame `0x87` (`on_status_changed` and
 `on_send_error` now emit `SID state=.. reg=.. time=.. linkmask=..`), which is
 the only reason any of this is observable without an SWD/RTT probe. Decode:
 `reg=1` = NOT_REGISTERED, `time=1` = NO_TIME, `state=1` = NOT_READY,
-`linkmask=0x1` = BLE link up (per `sid_api.h`).
+`linkmask=0x1` = BLE link up (per `sid_api.h`). Confirmed correct against
+Amazon's registration doc: success is reg=0/time=0/link=0.
+
+## Session 2026-08-09 — narrowed to the FFN handshake (measured, not inferred)
+
+Best-characterized state yet. What is now ruled out *by measurement*:
+
+- **Not a reboot loop.** BOOT-frame counter test (0x87 boot summary re-arms
+  its 20-emit counter only on a fresh boot): 0 BOOT frames over 40s on the
+  already-running device, and the USB device number is stable across 10-min
+  windows (a cold reboot re-enumerates). `gen=1` persists in the boot frame.
+- **Beacon is correct.** A BLE scanner (nRF Connect) shows a well-formed
+  Sidewalk FFN advertisement: service UUID 0xFE03, Amazon company ID 0x0171,
+  18-byte manufacturer payload, local name `SID_APP` (from the Sidewalk PAL,
+  not our CONFIG_BT_DEVICE_NAME). So credential construction, the radio, and
+  `sid_start()` all work.
+- **CloudWatch event pipe is confirmed working** — a test message published to
+  a temp rule landed in `/butterfi/sidewalk-events`. So the empty event log is
+  real evidence: Amazon's network never sees our device (no Proximity/reg
+  events), consistent with the link dying before any cloud relay.
+- **Echo Show is a confirmed BLE Sidewalk gateway** (per Amazon's gateway
+  table). Rebooting it + waiting the full 10 min (Amazon's troubleshooting for
+  "no success log") did NOT change the symptom.
+- **Cloud de-register is N/A**: `deregister-wireless-device` returns
+  ResourceNotFound because the device never registered (status stays
+  PROVISIONED). No cloud-side "registered" state to desync with our wipe.
+
+The actual finding: the SID_APP advertiser cycles its **resolvable private
+address (RPA)** — one identity (identical manufacturer payload), many MACs,
+several within a single scan (far faster than the 15-min RPA rotation). A
+gateway connects to an address that then stops existing, so the FFN link dies
+in under a second and nothing reaches the network. Config context:
+`CONFIG_BT_PRIVACY=y` (Sidewalk `imply`s it) with `CONFIG_BT_SETTINGS` **off**
+— a broken privacy config (IRK not persisted). Since the device is NOT
+rebooting, the churn is advertising-restart, i.e. downstream of the handshake
+failing — a symptom, not the root.
+
+Attempted fix `CONFIG_BT_SETTINGS=y`: **faults at boot** (dark board, halts
+with `CONFIG_RESET_ON_FATAL_ERROR=n`, does not recover on reset). It does not
+coexist with the way the Sidewalk stack already owns the settings subsystem /
+settings_storage — making it work would be its own integration task, and it
+only treats the address symptom anyway. Reverted.
+
+**Where it stands:** the FFN *handshake* fails (post-connection), the RPA churn
+is downstream, and the failure reason is not visible over USB telemetry.
+Everything reachable without more visibility is exhausted. The two remaining
+paths both need one thing we do not have on hand: (1) **RTT** over an SWD probe
+on the XIAO pads — the Sidewalk stack would print the disconnect/handshake
+failure reason directly (the RTT firmware is built and flashed; just attach a
+probe); or (2) **isolation**: stock `sid_end_device` on the XIAO, then a
+Nordic **nRF52840 DK**, to split "our board/provisioning" from "gateway /
+Amazon network".
 
 ## Third session update (2026-08-07, review-driven)
 
