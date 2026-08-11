@@ -1,6 +1,17 @@
+/* Add a second USB CDC ACM interface dedicated to the console + LOG backend,
+ * so the Sidewalk stack's own registration/FFN logs (including the disconnect
+ * reason) come out over USB as a second /dev/ttyACM — no SWD probe and no
+ * USB-serial adapter required. The existing board_cdc_acm_uart still carries
+ * the ButterFi binary protocol. */
+&zephyr_udc0 {
+	cdc_acm_uart1: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
 / {
 	chosen {
-		/delete-property/ zephyr,console;
+		zephyr,console = &cdc_acm_uart1;
 		/delete-property/ zephyr,shell-uart;
 		/delete-property/ zephyr,uart-mcumgr;
 		/delete-property/ zephyr,bt-mon-uart;
