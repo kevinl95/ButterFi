@@ -176,7 +176,11 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service: iot.amazonaws.com
+              # iotwireless assumes this role to deliver Sidewalk uplinks to the
+              # destination; iot is for the topic-rule Lambda action.
+              Service:
+                - iot.amazonaws.com
+                - iotwireless.amazonaws.com
             Action: sts:AssumeRole
       Policies:
         - PolicyName: ButterFiIoTRulePolicy
@@ -193,6 +197,19 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: '*'
+              # IoT Wireless assumes this role to deliver each Sidewalk uplink to
+              # the destination: it calls iot:DescribeEndpoint to find the data
+              # endpoint, then iot:Publish to the destination topic. Without
+              # DescribeEndpoint the delivery 403s and the uplink silently never
+              # reaches the rule (diagnosable only via Network Analyzer).
+              - Effect: Allow
+                Action:
+                  - iot:DescribeEndpoint
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iot:Publish
+                Resource: !Sub 'arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/butterfi/uplink'
 
   DestinationManagerLambdaRole:
     Type: AWS::IAM::Role
@@ -417,13 +434,24 @@ Resources:
 
               # IoT Core Sidewalk uplinks arrive with PayloadData (base64)
               payload_b64 = event.get('PayloadData', '')
-              device_id = event.get('WirelessMetadata', {}).get('Sidewalk', {}).get('SidewalkId', 'unknown')
+              # Use the WirelessDeviceId (UUID) downstream: it is what
+              # SendDataToWirelessDevice needs to address the downlink. The
+              # Sidewalk SidewalkId (short hex) is only for reference/logging.
+              device_id = event.get('WirelessDeviceId', 'unknown')
+              sidewalk_id = event.get('WirelessMetadata', {}).get('Sidewalk', {}).get('SidewalkId', 'unknown')
 
               if not payload_b64:
                   print('No payload data')
                   return {'statusCode': 400}
 
               raw = base64.b64decode(payload_b64)
+              # Amazon Sidewalk delivers the app payload hex-encoded: PayloadData
+              # is the base64 of an ASCII hex string (e.g. b'0101687474...'), not
+              # the raw bytes. Peel the hex layer; tolerate already-raw data.
+              try:
+                  raw = bytes.fromhex(raw.decode('ascii'))
+              except (ValueError, UnicodeDecodeError):
+                  pass
               if len(raw) < 2:
                   print(f'Payload too short: {len(raw)} bytes')
                   return {'statusCode': 400}
@@ -925,9 +953,17 @@ Resources:
 
               try:
                   iot_wireless.send_data_to_wireless_device(
-                      Id=device_id,
+                      Id=device_id,          # WirelessDeviceId (UUID), not SidewalkId
                       TransmitMode=0,  # 0 = best effort
-                      PayloadData=payload_b64
+                      PayloadData=payload_b64,
+                      # Sidewalk downlinks require WirelessMetadata; without it
+                      # SendDataToWirelessDevice fails ValidationException.
+                      WirelessMetadata={
+                          'Sidewalk': {
+                              'Seq': chunk_idx,
+                              'MessageType': 'CUSTOM_COMMAND_ID_NOTIFY'
+                          }
+                      }
                   )
                   print(f'Sent chunk {chunk_idx}/{total_chunks} to {device_id}')
               except Exception as e:
@@ -1071,9 +1107,16 @@ Resources:
 
                   try:
                       iot_wireless.send_data_to_wireless_device(
-                          Id=device_id,
+                          Id=device_id,      # WirelessDeviceId (UUID) from the resend topic
                           TransmitMode=0,
-                          PayloadData=payload_b64
+                          PayloadData=payload_b64,
+                          # Sidewalk downlinks require WirelessMetadata (see scraper).
+                          WirelessMetadata={
+                              'Sidewalk': {
+                                  'Seq': idx,
+                                  'MessageType': 'CUSTOM_COMMAND_ID_NOTIFY'
+                              }
+                          }
                       )
                       print(f'Resent chunk {idx}/{total} to {device_id}')
                       sent += 1
@@ -1093,8 +1136,13 @@ Resources:
     Properties:
       ServiceToken: !GetAtt DestinationManagerLambda.Arn
       Name: !Ref SidewalkDestinationName
-      Expression: !Ref SidewalkUplinkRule
-      ExpressionType: RuleName
+      # MqttTopic delivery: IoT Wireless publishes each uplink to the topic the
+      # SidewalkUplinkRule listens on ('butterfi/uplink'). This is the path
+      # verified end-to-end. (RuleName delivery to !Ref SidewalkUplinkRule also
+      # needs the role's iot:DescribeEndpoint permission added above; it was the
+      # original value but was not re-verified after the permission fix.)
+      Expression: butterfi/uplink
+      ExpressionType: MqttTopic
       RoleArn: !GetAtt SidewalkRuleRole.Arn
       Description: Routes ButterFi Sidewalk uplinks to processing Lambda
       Region: !Ref AWS::Region
