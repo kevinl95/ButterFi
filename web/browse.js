@@ -102,11 +102,33 @@ async function navigate(query) {
     }
 
     nav.pendingQuery = trimmed;
+    nav.awaitingReady = false;
+    clearTimeout(nav.readyTimer);
     elements.addressInput.value = trimmed;
-    elements.browseProgress.textContent = "Requesting…";
-    showPlaceholder("Requesting…");
     updateButtons();
 
+    // The firmware only accepts a query while Sidewalk is READY. After an idle
+    // period the device drops the gateway link and reconnects on its own, so if
+    // it isn't ready yet, hold the query and let the status handler fire it once
+    // the device reaches READY — instead of failing immediately.
+    if (device.deviceStatus?.deviceState !== 3) {
+        nav.awaitingReady = true;
+        elements.browseProgress.textContent = "Connecting to Sidewalk…";
+        showPlaceholder("Connecting to Sidewalk… (the dongle reconnects after being idle)");
+        nav.readyTimer = setTimeout(() => {
+            if (nav.awaitingReady) {
+                nav.awaitingReady = false;
+                nav.pendingQuery = null;
+                elements.browseProgress.textContent = "";
+                showPlaceholder("Sidewalk didn't reconnect in time — press Go to try again.");
+                updateButtons();
+            }
+        }, 90000);
+        return;
+    }
+
+    elements.browseProgress.textContent = "Requesting…";
+    showPlaceholder("Requesting…");
     try {
         await device.sendQuery(trimmed);
     } catch (error) {
@@ -146,11 +168,64 @@ device.addEventListener("status", (event) => {
     const label = deviceStateLabels[deviceState] ?? `State ${deviceState}`;
     const tone = deviceState === 3 ? "good" : deviceState === 5 ? "danger" : "warn";
     setPill(elements.deviceStatePill, label, tone);
+
+    // Fire a query that was held while the device (re)connected to Sidewalk.
+    const transferring = device.transfer && !device.transfer.complete;
+    if (deviceState === 3 && nav.awaitingReady && nav.pendingQuery && !transferring) {
+        nav.awaitingReady = false;
+        clearTimeout(nav.readyTimer);
+        const queued = nav.pendingQuery;
+        elements.browseProgress.textContent = "Requesting…";
+        showPlaceholder("Requesting…");
+        device.sendQuery(queued).catch((error) => {
+            elements.browseProgress.textContent = "";
+            showPlaceholder(`Could not send request: ${error.message}`);
+            updateButtons();
+        });
+    }
 });
+
+// ── Multi-chunk pull driver ──────────────────────────────────────────────
+// The scraper sends only chunk 0 and stores the rest in DynamoDB; the device
+// re-requests remaining chunks ONLY when the host asks (a 0x02 resend request,
+// served by the DownlinkLambda). Drive that pull here: kick it off when a
+// transfer starts, then re-request the next missing chunk whenever the stream
+// stalls, until the page is complete. Sidewalk downlinks are rate-limited, so
+// large pages trickle in over several seconds rather than arriving at once.
+let pullTimer = null;
+let lastReceived = -1;
+
+function stopPull() {
+    if (pullTimer !== null) {
+        clearInterval(pullTimer);
+        pullTimer = null;
+    }
+}
+
+function startPull() {
+    stopPull();
+    lastReceived = -1;
+    pullTimer = setInterval(() => {
+        const transfer = device.transfer;
+        if (!transfer || transfer.complete) {
+            stopPull();
+            return;
+        }
+        const received = transfer.chunks.filter(Boolean).length;
+        const hasGaps = transfer.totalChunks > 0 && received < transfer.totalChunks;
+        // Kick off on the first tick, then re-request only when stalled (no new
+        // chunk since the last tick) so an in-flight burst can flow first.
+        if (hasGaps && (lastReceived === -1 || received === lastReceived)) {
+            device.requestMissingChunk().catch(() => {});
+        }
+        lastReceived = received;
+    }, 2500);
+}
 
 device.addEventListener("transfer-start", () => {
     elements.browseProgress.textContent = "Loading…";
     showPlaceholder("Loading…");
+    startPull();
     updateButtons();
 });
 
@@ -165,6 +240,7 @@ device.addEventListener("chunk", () => {
 });
 
 device.addEventListener("complete", () => {
+    stopPull();
     const transfer = device.transfer;
     if (!transfer || !nav.pendingQuery) {
         return;
@@ -179,6 +255,7 @@ device.addEventListener("complete", () => {
 });
 
 device.addEventListener("error", (event) => {
+    stopPull();
     const { description, detail } = event.detail;
     nav.pendingQuery = null;
     elements.browseProgress.textContent = "";
