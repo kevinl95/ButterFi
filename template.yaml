@@ -131,6 +131,7 @@ Resources:
                 Action:
                   - dynamodb:PutItem
                   - dynamodb:BatchWriteItem
+                  - dynamodb:Query
                 Resource: !GetAtt ChunkTable.Arn
               - Effect: Allow
                 Action:
@@ -996,6 +997,19 @@ Resources:
 
                   print(f'Generated {total} chunks from {len(text)} chars')
 
+                  # A reused request_id (browse.js resets its counter to 1 on
+                  # reload) would collide with a previous transfer's chunks in
+                  # DynamoDB, corrupting `total` and leaving orphans. Clear this
+                  # request_id's chunks first.
+                  stale = table.query(
+                      KeyConditionExpression='deviceId = :d AND begins_with(chunkKey, :p)',
+                      ExpressionAttributeValues={':d': device_id, ':p': f'{request_id:03d}#'},
+                      ProjectionExpression='chunkKey'
+                  )
+                  with table.batch_writer() as batch:
+                      for it in stale.get('Items', []):
+                          batch.delete_item(Key={'deviceId': device_id, 'chunkKey': it['chunkKey']})
+
                   # Store all chunks in DynamoDB
                   with table.batch_writer() as batch:
                       for i, chunk in enumerate(chunks[:255]):
@@ -1063,7 +1077,7 @@ Resources:
               print(json.dumps(event))
 
               device_id = event.get('deviceId', '')
-              request_id = event.get('requestId', 0)
+              request_id = int(event.get('requestId', 0))
               start_idx = int(event.get('startIdx', 0))
 
               if not device_id:
@@ -1086,7 +1100,7 @@ Resources:
                   print(f'No chunks found for {device_id} req={request_id}')
                   return {'statusCode': 404}
 
-              total = items[0].get('total', len(items))
+              total = int(items[0].get('total', len(items)))  # DynamoDB numbers read as Decimal
 
               # Send chunks starting from requested index
               # Rate-limit: Sidewalk has uplink/downlink rate limits,
