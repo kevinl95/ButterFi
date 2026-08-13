@@ -230,6 +230,7 @@ export class ButterfiDevice extends EventTarget {
         if (!this.port) {
             return;
         }
+        this._closing = true;  // intentional close; suppress the read-loop drop handler
 
         if (typeof this.port.setSignals === "function") {
             try {
@@ -261,6 +262,7 @@ export class ButterfiDevice extends EventTarget {
         this.transfer = null;
         this.dispatchEvent(new CustomEvent("connection-change", { detail: { connected: false } }));
         this._log("system", "Serial port disconnected");
+        this._closing = false;
     }
 
     async requestDeviceStatus() {
@@ -421,6 +423,20 @@ export class ButterfiDevice extends EventTarget {
             }
         } catch (error) {
             this._log("system", `Read loop ended with error: ${error.message}`);
+        } finally {
+            // If the loop ended while we still thought we were connected and it
+            // wasn't an intentional disconnect(), the device was unplugged / the
+            // port dropped. Tear down and notify so the UI prompts a reconnect
+            // instead of spinning on a frozen device state forever.
+            if (this.connected && !this._closing) {
+                this.connected = false;
+                this.deviceStatus = { deviceState: 0, linkState: 0, activeRequest: 0 };
+                this.transfer = null;
+                try { this.reader?.releaseLock(); } catch (_) { /* already released */ }
+                this.reader = null;
+                this.dispatchEvent(new CustomEvent("connection-change", { detail: { connected: false } }));
+                this._log("system", "Device connection lost (unplugged?)");
+            }
         }
     }
 }

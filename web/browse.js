@@ -59,14 +59,6 @@ function showPlaceholder(message) {
     elements.pageContent.append(p);
 }
 
-function showStreamingText(text) {
-    elements.pageContent.innerHTML = "";
-    const pre = document.createElement("pre");
-    pre.className = "page-streaming";
-    pre.textContent = text || "Loading…";
-    elements.pageContent.append(pre);
-}
-
 function renderPage(text) {
     elements.pageContent.innerHTML = "";
     const { fragment } = renderButterfiMarkup(text);
@@ -154,9 +146,12 @@ device.addEventListener("connection-change", (event) => {
     } else {
         setPill(elements.connectionBadge, "Disconnected", "muted");
         setPill(elements.deviceStatePill, "Not connected", "muted");
-        showPlaceholder("Connect a device, then type a web address or search above and press Go.");
+        showPlaceholder("Device disconnected. Click “Connect device” to reconnect, then type an address and press Go.");
         nav.history = [];
         nav.index = -1;
+        nav.awaitingReady = false;
+        nav.pendingQuery = null;
+        clearTimeout(nav.readyTimer);
         elements.addressInput.value = "";
         elements.browseProgress.textContent = "";
     }
@@ -236,7 +231,12 @@ device.addEventListener("chunk", () => {
     }
     const received = transfer.chunks.filter(Boolean).length;
     elements.browseProgress.textContent = `Loading… ${received} / ${transfer.totalChunks} pieces`;
-    showStreamingText(transfer.chunks.map((chunk) => chunk ?? "").join(""));
+    // Render the ButterFi markup incrementally as pieces arrive (headings,
+    // lists, links) rather than showing plain text and snapping to styled at
+    // the end. renderButterfiMarkup handles a partial document: inline >N[label]
+    // links render as unresolved (plain, non-clickable) until the trailing link
+    // table arrives in a later piece, then resolve on the next re-render.
+    renderPage(transfer.chunks.map((chunk) => chunk ?? "").join(""));
 });
 
 device.addEventListener("complete", () => {
