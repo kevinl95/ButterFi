@@ -1,8 +1,9 @@
-const CACHE_NAME = "butterfi-console-v7";
+const CACHE_NAME = "butterfi-console-v8";
 const APP_SHELL = [
     "./",
     "./index.html",
     "./browse.html",
+    "./logo.png",
     "./styles.css",
     "./app.js",
     "./browse.js",

@@ -923,7 +923,9 @@ Resources:
               elif ' ' not in q and BARE_DOMAIN.match(q):
                   url = 'https://' + q  # bare domain -> fetch, don't search
               else:
-                  url = f'https://html.duckduckgo.com/html/?q={urllib.request.quote(query)}'
+                  # DuckDuckGo's /html route now falls back to a generic landing
+                  # page for this scraper UA; /lite still returns actual results.
+                  url = f'https://lite.duckduckgo.com/lite/?q={urllib.request.quote(query)}'
 
               req = urllib.request.Request(url, headers={
                   'User-Agent': 'ButterFi/1.0 (educational-access-bridge)'

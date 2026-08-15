@@ -55,6 +55,13 @@ export const errorCodeLabels = {
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
+const reconnectDelay = (ms) => new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+
+function samePortInfo(portInfo, previousInfo) {
+    return portInfo?.usbVendorId === previousInfo?.usbVendorId
+        && portInfo?.usbProductId === previousInfo?.usbProductId;
+}
+
 export class ButterfiFrameParser {
     constructor() {
         this.buffer = [];
@@ -158,11 +165,16 @@ export class ButterfiDevice extends EventTarget {
         this.reader = null;
         this.writer = null;
         this.readLoopPromise = null;
+        this.reconnectPromise = null;
         this.parser = new ButterfiFrameParser();
         this.connected = false;
+        this.reconnecting = false;
         this.requestCounter = 1;
         this.transfer = null;
         this.deviceStatus = { deviceState: 0, linkState: 0, activeRequest: 0 };
+        this._closing = false;
+        this._reconnectRetries = 12;
+        this._reconnectDelayMs = 1000;
     }
 
     get supported() {
@@ -177,6 +189,201 @@ export class ButterfiDevice extends EventTarget {
         const current = this.requestCounter;
         this.requestCounter = this.requestCounter >= 255 ? 1 : this.requestCounter + 1;
         return current;
+    }
+
+    _releaseReader(reader = this.reader) {
+        if (!reader) {
+            return;
+        }
+
+        try {
+            reader.releaseLock();
+        } catch (_) {
+            // Ignore lock-release races during reconnect / disconnect.
+        }
+    }
+
+    _releaseWriter(writer = this.writer) {
+        if (!writer) {
+            return;
+        }
+
+        try {
+            writer.releaseLock();
+        } catch (_) {
+            // Ignore lock-release races during reconnect / disconnect.
+        }
+    }
+
+    async _setSignals(asserted, port = this.port) {
+        if (!port || typeof port.setSignals !== "function") {
+            return;
+        }
+
+        try {
+            await port.setSignals({ dataTerminalReady: asserted, requestToSend: asserted });
+        } catch (error) {
+            this._log(
+                "system",
+                `Unable to ${asserted ? "assert" : "clear"} serial control lines: ${error.message}`
+            );
+        }
+    }
+
+    async _closePort(port, { clearSignals = false } = {}) {
+        if (!port) {
+            return;
+        }
+
+        if (clearSignals) {
+            await this._setSignals(false, port);
+        }
+
+        try {
+            await port.close();
+        } catch (_) {
+            // Ignore close failures; the USB session is already gone.
+        }
+    }
+
+    async _openPort(port, { reconnected = false } = {}) {
+        await port.open({ baudRate: 115200, bufferSize: 4096 });
+        await this._setSignals(true, port);
+
+        let writer = null;
+        let reader = null;
+
+        try {
+            writer = port.writable.getWriter();
+            reader = port.readable.getReader();
+        } catch (error) {
+            this._releaseReader(reader);
+            this._releaseWriter(writer);
+            await this._closePort(port);
+            throw error;
+        }
+
+        this.port = port;
+        this.writer = writer;
+        this.reader = reader;
+        this.connected = true;
+        this.reconnecting = false;
+        this.parser.reset();
+
+        this.readLoopPromise = this._readLoop();
+
+        try {
+            await this.requestDeviceStatus();
+        } catch (error) {
+            this.connected = false;
+            this.reader = null;
+            this.writer = null;
+
+            try {
+                await reader.cancel();
+            } catch (_) {
+                // Ignore cancellation failures; the session is already unstable.
+            }
+
+            this._releaseReader(reader);
+            this._releaseWriter(writer);
+            await this._closePort(port);
+
+            this.port = null;
+            this.readLoopPromise = null;
+            throw error;
+        }
+
+        const info = this.port.getInfo();
+        this.dispatchEvent(new CustomEvent("connection-change", {
+            detail: {
+                connected: true,
+                reconnecting: false,
+                reconnected,
+                usbVendorId: info.usbVendorId,
+                usbProductId: info.usbProductId,
+            },
+        }));
+        this._log("system", reconnected ? "Serial port reconnected" : "Serial port connected");
+    }
+
+    async _attemptReconnect(previousPort) {
+        const previousInfo = previousPort?.getInfo?.() ?? {};
+        let lastError = null;
+
+        for (let attempt = 0; attempt < this._reconnectRetries; attempt += 1) {
+            if (this._closing) {
+                return false;
+            }
+
+            const candidates = [];
+            const addCandidate = (candidate) => {
+                if (candidate && !candidates.includes(candidate)) {
+                    candidates.push(candidate);
+                }
+            };
+
+            addCandidate(previousPort);
+
+            try {
+                const authorizedPorts = await navigator.serial.getPorts();
+                authorizedPorts
+                    .filter((candidate) => samePortInfo(candidate.getInfo(), previousInfo))
+                    .forEach(addCandidate);
+            } catch (error) {
+                lastError = error;
+            }
+
+            for (const candidate of candidates) {
+                try {
+                    await this._openPort(candidate, { reconnected: true });
+                    return true;
+                } catch (error) {
+                    lastError = error;
+                    await this._closePort(candidate);
+                }
+            }
+
+            await reconnectDelay(this._reconnectDelayMs);
+        }
+
+        if (lastError) {
+            this._log("system", `Automatic reconnect failed: ${lastError.message}`);
+        }
+
+        return false;
+    }
+
+    async _handleUnexpectedDisconnect() {
+        const lostPort = this.port;
+
+        this.connected = false;
+        this.reconnecting = true;
+        this._releaseReader(this.reader);
+        this._releaseWriter(this.writer);
+        this.reader = null;
+        this.writer = null;
+
+        await this._closePort(lostPort);
+
+        this.dispatchEvent(new CustomEvent("connection-change", {
+            detail: { connected: false, reconnecting: true },
+        }));
+        this._log("system", "Device connection dropped; attempting automatic reconnect");
+
+        const recovered = await this._attemptReconnect(lostPort);
+        if (recovered) {
+            return;
+        }
+
+        this.port = null;
+        this.reconnecting = false;
+        this.deviceStatus = { deviceState: 0, linkState: 0, activeRequest: 0 };
+        this.transfer = null;
+        this.dispatchEvent(new CustomEvent("connection-change", {
+            detail: { connected: false, reconnecting: false },
+        }));
+        this._log("system", "Device connection lost");
     }
 
     async _writeFrame(frameType, requestId, payload = new Uint8Array(0)) {
@@ -196,71 +403,54 @@ export class ButterfiDevice extends EventTarget {
             throw new Error("Web Serial is not available in this browser");
         }
 
-        this.port = await navigator.serial.requestPort();
-        await this.port.open({ baudRate: 115200, bufferSize: 4096 });
-
-        if (typeof this.port.setSignals === "function") {
-            try {
-                await this.port.setSignals({ dataTerminalReady: true, requestToSend: true });
-            } catch (error) {
-                this._log("system", `Unable to assert serial control lines: ${error.message}`);
-            }
+        if (this.connected || this.reconnecting) {
+            return;
         }
 
-        this.writer = this.port.writable.getWriter();
-        this.reader = this.port.readable.getReader();
-        this.connected = true;
-        this.parser.reset();
-
-        const info = this.port.getInfo();
-        this.dispatchEvent(new CustomEvent("connection-change", {
-            detail: {
-                connected: true,
-                usbVendorId: info.usbVendorId,
-                usbProductId: info.usbProductId,
-            },
-        }));
-        this._log("system", "Serial port connected");
-
-        this.readLoopPromise = this._readLoop();
-        await this.requestDeviceStatus();
+        const port = await navigator.serial.requestPort();
+        await this._openPort(port);
     }
 
     async disconnect() {
-        if (!this.port) {
+        if (!this.port && !this.reconnectPromise) {
             return;
         }
-        this._closing = true;  // intentional close; suppress the read-loop drop handler
 
-        if (typeof this.port.setSignals === "function") {
+        this._closing = true;
+        this.reconnecting = false;
+
+        const port = this.port;
+        const reader = this.reader;
+        const readLoopPromise = this.readLoopPromise;
+        const reconnectPromise = this.reconnectPromise;
+
+        if (reader) {
             try {
-                await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
-            } catch (error) {
-                this._log("system", `Unable to clear serial control lines: ${error.message}`);
+                await reader.cancel();
+            } catch (_) {
+                // Ignore cancellation failures when the session already dropped.
             }
+            this._releaseReader(reader);
         }
+        this.reader = null;
 
-        if (this.reader) {
-            await this.reader.cancel();
-            this.reader.releaseLock();
-        }
-        if (this.writer) {
-            this.writer.releaseLock();
-        }
-        if (this.readLoopPromise) {
-            await this.readLoopPromise.catch(() => {});
-        }
+        this._releaseWriter(this.writer);
+        this.writer = null;
 
-        await this.port.close();
+        await Promise.allSettled([readLoopPromise, reconnectPromise].filter(Boolean));
+
+        await this._closePort(port, { clearSignals: true });
 
         this.port = null;
-        this.reader = null;
-        this.writer = null;
         this.readLoopPromise = null;
+        this.reconnectPromise = null;
         this.connected = false;
+        this.reconnecting = false;
         this.deviceStatus = { deviceState: 0, linkState: 0, activeRequest: 0 };
         this.transfer = null;
-        this.dispatchEvent(new CustomEvent("connection-change", { detail: { connected: false } }));
+        this.dispatchEvent(new CustomEvent("connection-change", {
+            detail: { connected: false, reconnecting: false },
+        }));
         this._log("system", "Serial port disconnected");
         this._closing = false;
     }
@@ -424,18 +614,16 @@ export class ButterfiDevice extends EventTarget {
         } catch (error) {
             this._log("system", `Read loop ended with error: ${error.message}`);
         } finally {
-            // If the loop ended while we still thought we were connected and it
-            // wasn't an intentional disconnect(), the device was unplugged / the
-            // port dropped. Tear down and notify so the UI prompts a reconnect
-            // instead of spinning on a frozen device state forever.
             if (this.connected && !this._closing) {
-                this.connected = false;
-                this.deviceStatus = { deviceState: 0, linkState: 0, activeRequest: 0 };
-                this.transfer = null;
-                try { this.reader?.releaseLock(); } catch (_) { /* already released */ }
-                this.reader = null;
-                this.dispatchEvent(new CustomEvent("connection-change", { detail: { connected: false } }));
-                this._log("system", "Device connection lost (unplugged?)");
+                const reconnectPromise = this._handleUnexpectedDisconnect();
+                this.reconnectPromise = reconnectPromise;
+                try {
+                    await reconnectPromise;
+                } finally {
+                    if (this.reconnectPromise === reconnectPromise) {
+                        this.reconnectPromise = null;
+                    }
+                }
             }
         }
     }

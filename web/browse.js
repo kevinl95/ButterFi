@@ -44,12 +44,13 @@ function setPill(element, text, tone) {
 
 function updateButtons() {
     const connected = device.connected;
+    const reconnecting = device.reconnecting;
     const loading = Boolean(device.transfer) && !device.transfer.complete;
 
-    elements.connectButton.disabled = connected || !device.supported;
-    elements.disconnectButton.disabled = !connected;
-    elements.addressInput.disabled = !connected;
-    elements.goButton.disabled = !connected || loading || !elements.addressInput.value.trim();
+    elements.connectButton.disabled = connected || reconnecting || !device.supported;
+    elements.disconnectButton.disabled = !(connected || reconnecting || device.port);
+    elements.addressInput.disabled = !connected || reconnecting;
+    elements.goButton.disabled = !connected || reconnecting || loading || !elements.addressInput.value.trim();
     elements.backButton.disabled = nav.index <= 0 || loading;
     // Save PDF is available whenever a completed page is on screen (even after
     // disconnect) — it prints what's already rendered, no device needed.
@@ -147,18 +148,34 @@ device.addEventListener("connection-change", (event) => {
     if (event.detail.connected) {
         setPill(elements.connectionBadge, "Connected", "good");
         setPill(elements.deviceStatePill, "Connecting…", "warn");
-        showPlaceholder("Type a web address or search above and press Go.");
+        if (nav.history.length === 0) {
+            showPlaceholder("Type a web address or search above and press Go.");
+        }
+        if (!nav.awaitingReady) {
+            elements.browseProgress.textContent = "";
+        }
+    } else if (event.detail.reconnecting) {
+        setPill(elements.connectionBadge, "Reconnecting", "warn");
+        setPill(elements.deviceStatePill, "Reconnecting…", "warn");
+        if (nav.history.length === 0) {
+            showPlaceholder("Device connection dropped. Reconnecting…");
+        }
+        if (!nav.awaitingReady) {
+            elements.browseProgress.textContent = "Device sleeping — reconnecting…";
+        }
     } else {
         setPill(elements.connectionBadge, "Disconnected", "muted");
         setPill(elements.deviceStatePill, "Not connected", "muted");
-        showPlaceholder("Device disconnected. Click “Connect device” to reconnect, then type an address and press Go.");
-        nav.history = [];
-        nav.index = -1;
+        if (nav.history.length === 0) {
+            showPlaceholder("Device disconnected. Click “Connect device” to reconnect, then type an address and press Go.");
+            elements.addressInput.value = "";
+            elements.browseProgress.textContent = "";
+        } else {
+            elements.browseProgress.textContent = "Device disconnected. Reconnect to load another page.";
+        }
         nav.awaitingReady = false;
         nav.pendingQuery = null;
         clearTimeout(nav.readyTimer);
-        elements.addressInput.value = "";
-        elements.browseProgress.textContent = "";
     }
     updateButtons();
 });

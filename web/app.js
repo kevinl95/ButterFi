@@ -8,6 +8,7 @@ const pwaAssets = [
     "./",
     "./index.html",
     "./browse.html",
+    "./logo.png",
     "./styles.css",
     "./app.js",
     "./browse.js",
@@ -119,20 +120,25 @@ function updateInstallUi() {
 
 function updateButtons() {
     const connected = device.connected;
+    const reconnecting = device.reconnecting;
     const hasTransfer = Boolean(device.transfer);
     const missingChunk = hasTransfer ? device.getNextMissingChunkIndex() !== null : false;
 
-    elements.connectButton.disabled = connected || !device.supported;
-    elements.disconnectButton.disabled = !connected;
+    elements.connectButton.disabled = connected || reconnecting || !device.supported;
+    elements.disconnectButton.disabled = !(connected || reconnecting || device.port);
     elements.statusButton.disabled = !connected;
-    elements.sendButton.disabled = !connected || !elements.queryInput.value.trim();
-    elements.cancelButton.disabled = !connected || !hasTransfer;
-    elements.resendButton.disabled = !connected || !hasTransfer || !missingChunk;
+    elements.sendButton.disabled = !connected || reconnecting || !elements.queryInput.value.trim();
+    elements.cancelButton.disabled = !connected || reconnecting || !hasTransfer;
+    elements.resendButton.disabled = !connected || reconnecting || !hasTransfer || !missingChunk;
 }
 
 function updateConnectionUi() {
     if (device.connected) {
         setPill(elements.connectionBadge, "Connected", "good");
+    } else if (device.reconnecting) {
+        setPill(elements.connectionBadge, "Reconnecting", "warn");
+        elements.deviceState.textContent = "Reconnecting";
+        elements.linkState.textContent = "Unknown";
     } else {
         setPill(elements.connectionBadge, "Disconnected", "muted");
         elements.deviceState.textContent = "Unknown";
