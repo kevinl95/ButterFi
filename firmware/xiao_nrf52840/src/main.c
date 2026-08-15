@@ -155,7 +155,6 @@ static struct sid_handle *sid_handle   = NULL;
 #define BUTTERFI_SIDEWALK_MSG_QUERY 0x01
 #define BUTTERFI_SIDEWALK_MSG_RESEND 0x02
 #define BUTTERFI_SIDEWALK_MSG_ACK 0x03
-#define BUTTERFI_SIDEWALK_MSG_CONTACT 0x04
 #define BUTTERFI_SIDEWALK_MSG_RESPONSE_CHUNK 0x81
 /* Sidewalk BLE caps a single message at 255 bytes; our uplink adds a 2-byte
  * header (type + request id), so the app payload must stay <= 253. A larger
@@ -314,14 +313,12 @@ struct butterfi_host_config_json {
     char school_id[BUTTERFI_SCHOOL_ID_MAX];
     char device_name[BUTTERFI_DEVICE_NAME_MAX];
     char content_pkg[BUTTERFI_CONTENT_PKG_MAX];
-    char teacher_email[BUTTERFI_TEACHER_EMAIL_MAX];
 };
 
 static const struct json_obj_descr butterfi_host_config_descr[] = {
     JSON_OBJ_DESCR_PRIM(struct butterfi_host_config_json, school_id, JSON_TOK_STRING_BUF),
     JSON_OBJ_DESCR_PRIM(struct butterfi_host_config_json, device_name, JSON_TOK_STRING_BUF),
     JSON_OBJ_DESCR_PRIM(struct butterfi_host_config_json, content_pkg, JSON_TOK_STRING_BUF),
-    JSON_OBJ_DESCR_PRIM(struct butterfi_host_config_json, teacher_email, JSON_TOK_STRING_BUF),
 };
 
 static int save_host_config_payload(const uint8_t *payload, uint16_t payload_len)
@@ -362,12 +359,6 @@ static int save_host_config_payload(const uint8_t *payload, uint16_t payload_len
         strncpy(cfg.device_name, host_cfg.device_name, sizeof(cfg.device_name) - 1);
     } else {
         strncpy(cfg.device_name, "ButterFi-Dongle", sizeof(cfg.device_name) - 1);
-    }
-
-    /* Optional: teacher contact email (contact-teacher feature). Left empty if
-     * the provisioning payload omits it. */
-    if (host_cfg.teacher_email[0] != '\0') {
-        strncpy(cfg.teacher_email, host_cfg.teacher_email, sizeof(cfg.teacher_email) - 1);
     }
 
     return butterfi_config_save(&cfg);
@@ -553,76 +544,6 @@ static void handle_host_frame(uint8_t frame_type,
         current_led_state = LED_STATE_SENDING;
         (void)butterfi_usb_send_uplink_accepted(request_id);
         break;
-#endif
-
-    case BUTTERFI_USB_FRAME_HOST_CONTACT_SUBMIT:
-#if BUTTERFI_USB_CONTROL_DEBUG || !BUTTERFI_INCLUDE_SIDEWALK
-        (void)butterfi_usb_send_transfer_error(request_id,
-                                               BUTTERFI_USB_ERROR_SIDEWALK_UNAVAILABLE,
-                                               "usb control debug build");
-        break;
-#else
-    {
-        const char *teacher = butterfi_config_get_teacher_email();
-        uint8_t contact_buf[BUTTERFI_SIDEWALK_UPLINK_MAX_PAYLOAD];
-        size_t tlen;
-
-        if (teacher == NULL || teacher[0] == '\0') {
-            (void)butterfi_usb_send_transfer_error(request_id,
-                                                   BUTTERFI_USB_ERROR_PROTOCOL_MISMATCH,
-                                                   "no teacher email on this dongle");
-            break;
-        }
-        if (payload_len == 0) {
-            (void)butterfi_usb_send_transfer_error(request_id,
-                                                   BUTTERFI_USB_ERROR_PROTOCOL_MISMATCH,
-                                                   "message required");
-            break;
-        }
-        if (request_in_flight) {
-            (void)butterfi_usb_send_transfer_error(request_id,
-                                                   BUTTERFI_USB_ERROR_DEVICE_BUSY,
-                                                   "request already active");
-            break;
-        }
-        if (sidewalk_state != SIDEWALK_STATE_READY || sid_handle == NULL) {
-            (void)butterfi_usb_send_transfer_error(request_id,
-                                                   BUTTERFI_USB_ERROR_SIDEWALK_UNAVAILABLE,
-                                                   sidewalk_unavailable_reason());
-            break;
-        }
-
-        /* Sidewalk body = teacher_email + '\0' + message; the cloud splits on
-         * the first NUL. Reject if it doesn't fit a single uplink. Contact is
-         * fire-and-forget (no chunked response), so we do NOT start a transfer. */
-        tlen = strnlen(teacher, BUTTERFI_TEACHER_EMAIL_MAX);
-        if (tlen + 1 + payload_len > sizeof(contact_buf)) {
-            (void)butterfi_usb_send_transfer_error(request_id,
-                                                   BUTTERFI_USB_ERROR_PROTOCOL_MISMATCH,
-                                                   "message too long");
-            break;
-        }
-        memcpy(contact_buf, teacher, tlen);
-        contact_buf[tlen] = '\0';
-        memcpy(contact_buf + tlen + 1, payload, payload_len);
-
-        sid_err = send_sidewalk_uplink(BUTTERFI_SIDEWALK_MSG_CONTACT,
-                                       request_id,
-                                       contact_buf,
-                                       tlen + 1 + payload_len);
-        if (sid_err != SID_ERROR_NONE) {
-            LOG_ERR("Contact uplink failed: %d", sid_err);
-            (void)butterfi_usb_send_transfer_error(request_id,
-                                                   BUTTERFI_USB_ERROR_CLOUD_FETCH_FAILED,
-                                                   "contact uplink failed");
-            break;
-        }
-
-        LOG_INF("Contact message queued for teacher");
-        current_led_state = LED_STATE_SENDING;
-        (void)butterfi_usb_send_contact_sent(request_id);
-        break;
-    }
 #endif
 
     case BUTTERFI_USB_FRAME_HOST_RESEND_REQUEST:

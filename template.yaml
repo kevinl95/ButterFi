@@ -27,15 +27,6 @@ Parameters:
     Default: 24
     Description: Hours to keep chunked responses in DynamoDB before TTL expiry
 
-  SenderEmail:
-    Type: String
-    Default: ''
-    Description: >-
-      SES-verified From address for "contact teacher" emails. Must be verified in
-      Amazon SES; while SES is in sandbox, teacher recipient addresses must also
-      be verified (request production access to email arbitrary teachers). Leave
-      blank to leave the contact-teacher feature unconfigured.
-
 Resources:
 
   # ---------------------------------------------------------------
@@ -112,10 +103,6 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:UpdateItem
                 Resource: !GetAtt ChunkTable.Arn
-              - Effect: Allow
-                Action:
-                  - ses:SendEmail
-                Resource: '*'
 
   ScraperLambdaRole:
     Type: AWS::IAM::Role
@@ -415,7 +402,6 @@ Resources:
         Variables:
           SCRAPE_QUEUE_URL: !Ref ScrapeQueue
           CHUNK_TABLE: !Ref ChunkTable
-          SENDER_EMAIL: !Ref SenderEmail
       Code:
         ZipFile: |
           """
@@ -443,7 +429,6 @@ Resources:
 
           QUEUE_URL = os.environ['SCRAPE_QUEUE_URL']
           TABLE = os.environ['CHUNK_TABLE']
-          SENDER_EMAIL = os.environ.get('SENDER_EMAIL', '')  # SES-verified From address
 
           def handler(event, context):
               print(json.dumps(event))
@@ -477,8 +462,6 @@ Resources:
               body = raw[2:]
               query = ''
               control_value = None
-              contact_to = ''
-              contact_msg = ''
 
               if msg_type == 0x01:
                   if not body:
@@ -490,18 +473,11 @@ Resources:
                       print(f'Invalid control payload length for type {msg_type:#x}: {len(body)}')
                       return {'statusCode': 400}
                   control_value = body[0]
-              elif msg_type == 0x04:
-                  # Contact teacher: body is teacher_email + b'\x00' + message.
-                  to_bytes, sep, msg_bytes = body.partition(b'\x00')
-                  contact_to = to_bytes.decode('utf-8', errors='replace').strip()
-                  contact_msg = msg_bytes.decode('utf-8', errors='replace') if sep else ''
 
               if msg_type == 0x01:
                   print(f'device={device_id} type={msg_type:#x} req={request_id} query={query}')
               elif msg_type in (0x02, 0x03):
                   print(f'device={device_id} type={msg_type:#x} req={request_id} value={control_value}')
-              elif msg_type == 0x04:
-                  print(f'device={device_id} type=0x4 req={request_id} contact_to={contact_to}')
               else:
                   print(f'device={device_id} type={msg_type:#x} req={request_id}')
 
@@ -534,30 +510,6 @@ Resources:
               elif msg_type == 0x03:  # ACK
                   print(f'ACK from {device_id} for chunk {control_value}')
                   return {'statusCode': 200}
-
-              elif msg_type == 0x04:  # Contact a teacher via email (SES)
-                  if not SENDER_EMAIL:
-                      print('SENDER_EMAIL env not set')
-                      return {'statusCode': 500}
-                  if '@' not in contact_to:
-                      print(f'Invalid teacher email: {contact_to!r}')
-                      return {'statusCode': 400}
-                  ses = boto3.client('ses')
-                  try:
-                      ses.send_email(
-                          Source=SENDER_EMAIL,
-                          Destination={'ToAddresses': [contact_to]},
-                          Message={
-                              'Subject': {'Data': 'ButterFi: a student needs to reach you'},
-                              'Body': {'Text': {'Data': (contact_msg or '(no message)')
-                                                        + f'\n\n---\nSent via ButterFi device {sidewalk_id}.'}},
-                          },
-                      )
-                      print(f'Contact email sent to {contact_to}')
-                      return {'statusCode': 200}
-                  except Exception as e:
-                      print(f'SES send failed: {e}')
-                      return {'statusCode': 502}
 
               return {'statusCode': 400, 'body': 'Unknown message type'}
 

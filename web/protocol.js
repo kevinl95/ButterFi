@@ -13,13 +13,11 @@ export const USB = {
     frameHostResendRequest: 0x02,
     frameHostCancelRequest: 0x03,
     frameHostStatusRequest: 0x05,
-    frameHostContactSubmit: 0x08,
     frameDeviceStatus: 0x81,
     frameDeviceUplinkAccepted: 0x82,
     frameDeviceResponseChunk: 0x83,
     frameDeviceTransferComplete: 0x84,
     frameDeviceTransferError: 0x85,
-    frameDeviceContactSent: 0x8A,
     maxPayload: 512,
 };
 
@@ -287,19 +285,6 @@ export class ButterfiDevice extends EventTarget {
         return requestId;
     }
 
-    async sendContact(message) {
-        const trimmed = (message || "").trim();
-        if (!trimmed) {
-            return null;
-        }
-        // Fire-and-forget: no transfer/chunk state. The device wraps the text
-        // with its provisioned teacher email and uplinks it; the cloud emails it.
-        const requestId = this._nextRequestId();
-        await this._writeFrame(USB.frameHostContactSubmit, requestId, textEncoder.encode(trimmed));
-        this._log("host", `Sent contact message ${requestId}`);
-        return requestId;
-    }
-
     async cancelTransfer() {
         if (!this.transfer) {
             return;
@@ -415,10 +400,6 @@ export class ButterfiDevice extends EventTarget {
                 break;
             case USB.frameDeviceTransferError:
                 this._handleTransferError(frame.requestId, frame.payload);
-                break;
-            case USB.frameDeviceContactSent:
-                this._log("device", `Contact message sent (request ${frame.requestId})`);
-                this.dispatchEvent(new CustomEvent("contact-sent", { detail: { requestId: frame.requestId } }));
                 break;
             default:
                 this._log("device", `Unhandled frame type 0x${frame.frameType.toString(16)}`);

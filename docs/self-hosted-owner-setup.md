@@ -65,34 +65,6 @@ aws cloudformation deploy \
   --region us-east-1
 ```
 
-## Contact Teacher (Email via SES)
-
-The student browser's "Contact teacher" button sends a short message over
-Sidewalk; the UplinkLambda emails it to the teacher via Amazon SES. Two one-time,
-out-of-band setup steps are required:
-
-1. **Deploy with a sender address.** Pass the `SenderEmail` stack parameter — the
-   address SES sends *from* (e.g. `no-reply@yourschool.org`, or your own email
-   for testing):
-
-   ```bash
-   aws cloudformation deploy --template-file template.yaml --stack-name butterfi \
-     --capabilities CAPABILITY_NAMED_IAM --region us-east-1 \
-     --parameter-overrides SenderEmail=no-reply@yourschool.org
-   ```
-
-2. **Verify identities in Amazon SES** (console → SES → Verified identities):
-   - Verify the **sender** address or domain (SES emails a confirmation link you
-     must click).
-   - New SES accounts start in the **sandbox**, which can only email **verified
-     recipients**. For a pilot, verify each teacher's address; to email arbitrary
-     teachers, request SES **production access**.
-
-Then, in [provision.html](../web/provision.html), set the **Teacher Email** for
-each dongle. That address is stored on the device (NVS) and rides in the contact
-uplink — the student can't change the recipient from the browser. Leave it blank
-to disable the button on that dongle.
-
 ## What The Provisioning Page Actually Uses
 
 Today the provisioning page consumes:

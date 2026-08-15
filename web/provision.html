@@ -585,12 +585,6 @@
     </div>
 
     <div class="field">
-      <label>Teacher Email <span class="badge">Optional</span></label>
-      <input type="email" id="teacher-email" placeholder="e.g. ms.rivera@school.org" autocomplete="off" spellcheck="false">
-      <div class="field-help">Where the "Contact teacher" button on the student browser sends messages. Leave blank to disable that feature on this dongle.</div>
-    </div>
-
-    <div class="field">
       <label>Content Package</label>
       <div class="select-wrap">
         <select id="content-pkg">
@@ -886,7 +880,6 @@ function normalizeBatchDevice(rawDevice, index, defaults) {
     schoolId: rawDevice.school_id || rawDevice.schoolId || defaults.schoolId || '',
     deviceName: rawDevice.device_name || rawDevice.deviceName || rawDevice.label || `ButterFi-${index + 1}`,
     contentPkg: rawDevice.content_pkg || rawDevice.contentPkg || defaults.contentPkg || 'k12-general',
-    teacherEmail: rawDevice.teacher_email || rawDevice.teacherEmail || defaults.teacherEmail || '',
     credential,
   };
 }
@@ -905,7 +898,6 @@ function parseBatchPackage(text) {
   const defaults = {
     schoolId: parsed.defaults?.school_id || parsed.defaults?.schoolId || '',
     contentPkg: parsed.defaults?.content_pkg || parsed.defaults?.contentPkg || 'k12-general',
-    teacherEmail: parsed.defaults?.teacher_email || parsed.defaults?.teacherEmail || '',
   };
 
   const batchId = parsed.batch_id || parsed.batchId || `batch-${Date.now()}`;
@@ -1006,7 +998,6 @@ function applyBatchDeviceToForm(device) {
   document.getElementById('school-id').value = device.schoolId || '';
   document.getElementById('device-name').value = device.deviceName || '';
   document.getElementById('content-pkg').value = device.contentPkg || 'k12-general';
-  document.getElementById('teacher-email').value = device.teacherEmail || '';
 }
 
 function renderBatchSummary() {
@@ -1310,7 +1301,6 @@ function buildConfig() {
     school_id: document.getElementById('school-id').value.trim(),
     device_name: document.getElementById('device-name').value.trim() || 'ButterFi-Dongle',
     content_pkg: document.getElementById('content-pkg').value,
-    teacher_email: document.getElementById('teacher-email').value.trim(),
     firmware_name: firmwareSource?.name || null,
     sidewalk_credential_name: credentialSource?.name || null,
     provisioned_at: new Date().toISOString(),
@@ -1764,7 +1754,6 @@ function buildRuntimeConfigPayload(cfg) {
     school_id: cfg.school_id,
     device_name: cfg.device_name,
     content_pkg: cfg.content_pkg,
-    teacher_email: cfg.teacher_email || '',
   }));
 }
 

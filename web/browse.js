@@ -16,12 +16,6 @@ const elements = {
     pageContent: document.querySelector("#page-content"),
     pdfButton: document.querySelector("#pdf-button"),
     printHeader: document.querySelector("#print-header"),
-    contactButton: document.querySelector("#contact-button"),
-    contactPanel: document.querySelector("#contact-panel"),
-    contactText: document.querySelector("#contact-text"),
-    contactSend: document.querySelector("#contact-send"),
-    contactCancel: document.querySelector("#contact-cancel"),
-    contactStatus: document.querySelector("#contact-status"),
 };
 
 const device = new ButterfiDevice();
@@ -60,8 +54,6 @@ function updateButtons() {
     // Save PDF is available whenever a completed page is on screen (even after
     // disconnect) — it prints what's already rendered, no device needed.
     elements.pdfButton.disabled = loading || nav.index < 0;
-    // Contact teacher needs a connected device (it uplinks over Sidewalk).
-    elements.contactButton.disabled = !connected;
 }
 
 function showPlaceholder(message) {
@@ -164,10 +156,6 @@ device.addEventListener("connection-change", (event) => {
         nav.index = -1;
         nav.awaitingReady = false;
         nav.pendingQuery = null;
-        nav.pendingContact = null;
-        nav.contactInFlight = false;
-        elements.contactPanel.hidden = true;
-        setContactStatus("");
         clearTimeout(nav.readyTimer);
         elements.addressInput.value = "";
         elements.browseProgress.textContent = "";
@@ -194,13 +182,6 @@ device.addEventListener("status", (event) => {
             showPlaceholder(`Could not send request: ${error.message}`);
             updateButtons();
         });
-    }
-
-    // Fire a contact message that was held until the device reconnected.
-    if (deviceState === 3 && nav.pendingContact) {
-        const queuedContact = nav.pendingContact;
-        nav.pendingContact = null;
-        sendContactMessage(queuedContact);
     }
 });
 
@@ -279,15 +260,8 @@ device.addEventListener("complete", () => {
 });
 
 device.addEventListener("error", (event) => {
-    const { description, detail } = event.detail;
-    // A contact submit failure (e.g. no teacher email provisioned) comes back as
-    // the same transfer-error frame — route it to the compose panel, not the page.
-    if (nav.contactInFlight) {
-        nav.contactInFlight = false;
-        setContactStatus(`${description}${detail ? ` — ${detail}` : ""}`);
-        return;
-    }
     stopPull();
+    const { description, detail } = event.detail;
     nav.pendingQuery = null;
     elements.browseProgress.textContent = "";
     showPlaceholder(`${description}${detail ? ` — ${detail}` : ""}`);
@@ -312,69 +286,6 @@ elements.pdfButton.addEventListener("click", () => {
     const entry = nav.history[nav.index];
     elements.printHeader.textContent = entry ? entry.query : (elements.addressInput.value || "");
     window.print();
-});
-
-// ── Contact teacher ──────────────────────────────────────────────────────
-function setContactStatus(message) {
-    elements.contactStatus.textContent = message || "";
-}
-
-function sendContactMessage(message) {
-    nav.contactInFlight = true;
-    setContactStatus("Sending…");
-    device.sendContact(message).catch((error) => {
-        nav.contactInFlight = false;
-        setContactStatus(`Could not send: ${error.message}`);
-    });
-}
-
-elements.contactButton.addEventListener("click", () => {
-    elements.contactPanel.hidden = !elements.contactPanel.hidden;
-    if (!elements.contactPanel.hidden) {
-        setContactStatus("");
-        elements.contactText.focus();
-    }
-});
-
-elements.contactCancel.addEventListener("click", () => {
-    elements.contactPanel.hidden = true;
-    nav.pendingContact = null;
-    setContactStatus("");
-});
-
-elements.contactSend.addEventListener("click", () => {
-    const text = elements.contactText.value.trim();
-    if (!text) {
-        setContactStatus("Type a message first.");
-        return;
-    }
-    // Append the page context, trimmed to keep the whole thing inside one
-    // Sidewalk uplink (the device prepends the teacher email + a NUL, and the
-    // firmware rejects an over-length message).
-    const page = nav.history[nav.index]?.query || elements.addressInput.value || "";
-    let message = page ? `${text} (page: ${page})` : text;
-    if (message.length > 200) {
-        message = message.slice(0, 200);
-    }
-    // Hold until Sidewalk is READY (the device rejects a contact otherwise),
-    // then fire from the status handler — same pattern as navigate().
-    if (device.deviceStatus?.deviceState === 3) {
-        sendContactMessage(message);
-    } else {
-        nav.pendingContact = message;
-        nav.contactInFlight = true;
-        setContactStatus("Connecting to Sidewalk… will send when ready.");
-    }
-});
-
-device.addEventListener("contact-sent", () => {
-    nav.contactInFlight = false;
-    setContactStatus("Message sent to your teacher ✓");
-    elements.contactText.value = "";
-    setTimeout(() => {
-        elements.contactPanel.hidden = true;
-        setContactStatus("");
-    }, 2500);
 });
 
 elements.addressInput.addEventListener("keydown", (event) => {

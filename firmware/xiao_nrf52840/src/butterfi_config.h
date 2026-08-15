@@ -17,18 +17,15 @@
 #define NVS_ID_CONTENT_PKG   3
 #define NVS_ID_PROVISIONED   4   /* u8: 0=no, 1=yes */
 #define NVS_ID_MAINT_GEN     5   /* u32: one-time-maintenance generation */
-#define NVS_ID_TEACHER_EMAIL 6   /* teacher contact address (contact-teacher feature) */
 
-#define BUTTERFI_SCHOOL_ID_MAX    32
-#define BUTTERFI_DEVICE_NAME_MAX  48
-#define BUTTERFI_CONTENT_PKG_MAX  24
-#define BUTTERFI_TEACHER_EMAIL_MAX 64
+#define BUTTERFI_SCHOOL_ID_MAX   32
+#define BUTTERFI_DEVICE_NAME_MAX 48
+#define BUTTERFI_CONTENT_PKG_MAX 24
 
 typedef struct {
     char school_id[BUTTERFI_SCHOOL_ID_MAX];
     char device_name[BUTTERFI_DEVICE_NAME_MAX];
     char content_pkg[BUTTERFI_CONTENT_PKG_MAX];
-    char teacher_email[BUTTERFI_TEACHER_EMAIL_MAX];
     bool provisioned;
 } butterfi_config_t;
 
@@ -59,7 +56,6 @@ int butterfi_config_set_maint_gen(uint32_t gen);
 const char *butterfi_config_get_school_id(void);
 const char *butterfi_config_get_device_name(void);
 const char *butterfi_config_get_content_pkg(void);
-const char *butterfi_config_get_teacher_email(void);
 bool        butterfi_config_is_provisioned(void);
 
 #endif /* BUTTERFI_CONFIG_H */
