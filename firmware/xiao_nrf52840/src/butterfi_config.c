@@ -78,6 +78,15 @@ int butterfi_config_load(void)
                 sizeof(active_config.content_pkg));
     }
 
+    /* Optional: teacher contact email for the contact-teacher feature. Empty
+     * if the dongle was provisioned without one. */
+    len = nvs_read(&fs, NVS_ID_TEACHER_EMAIL,
+                   active_config.teacher_email,
+                   sizeof(active_config.teacher_email));
+    if (len <= 0) {
+        active_config.teacher_email[0] = '\0';
+    }
+
     uint8_t prov = 0;
     nvs_read(&fs, NVS_ID_PROVISIONED, &prov, sizeof(prov));
     active_config.provisioned = (prov == 1);
@@ -104,6 +113,11 @@ int butterfi_config_save(const butterfi_config_t *cfg)
                     cfg->content_pkg,
                     strnlen(cfg->content_pkg, BUTTERFI_CONTENT_PKG_MAX) + 1);
     if (ret < 0) { LOG_ERR("NVS write content_pkg failed: %d", ret); return ret; }
+
+    ret = nvs_write(&fs, NVS_ID_TEACHER_EMAIL,
+                    cfg->teacher_email,
+                    strnlen(cfg->teacher_email, BUTTERFI_TEACHER_EMAIL_MAX) + 1);
+    if (ret < 0) { LOG_ERR("NVS write teacher_email failed: %d", ret); return ret; }
 
     uint8_t prov = 1;
     ret = nvs_write(&fs, NVS_ID_PROVISIONED, &prov, sizeof(prov));
@@ -174,4 +188,5 @@ int butterfi_config_set_maint_gen(uint32_t gen)
 const char *butterfi_config_get_school_id(void)   { return active_config.school_id; }
 const char *butterfi_config_get_device_name(void) { return active_config.device_name; }
 const char *butterfi_config_get_content_pkg(void) { return active_config.content_pkg; }
+const char *butterfi_config_get_teacher_email(void) { return active_config.teacher_email; }
 bool        butterfi_config_is_provisioned(void)  { return active_config.provisioned; }

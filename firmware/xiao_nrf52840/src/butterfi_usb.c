@@ -248,6 +248,11 @@ int butterfi_usb_send_uplink_accepted(uint8_t request_id)
     return send_frame(BUTTERFI_USB_FRAME_DEVICE_UPLINK_ACCEPTED, request_id, NULL, 0, 0);
 }
 
+int butterfi_usb_send_contact_sent(uint8_t request_id)
+{
+    return send_frame(BUTTERFI_USB_FRAME_DEVICE_CONTACT_SENT, request_id, NULL, 0, 0);
+}
+
 int butterfi_usb_send_response_chunk(uint8_t request_id,
                                      const uint8_t *payload,
                                      uint16_t payload_len)
