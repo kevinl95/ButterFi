@@ -460,6 +460,42 @@ textarea:focus {
     }
 }
 
+/* ── Contact teacher compose panel ───────────────────────────────────────── */
+.contact-panel {
+    margin-top: 12px;
+    padding: 14px 16px;
+    border: 1px solid var(--panel-stroke);
+    border-radius: var(--radius-md);
+    background: var(--panel-bg);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.contact-panel[hidden] {
+    display: none;
+}
+.contact-panel label {
+    font-weight: 600;
+    color: var(--ink-strong);
+}
+.contact-panel textarea {
+    width: 100%;
+    box-sizing: border-box;
+    resize: vertical;
+    font: inherit;
+    padding: 8px 10px;
+    border: 1px solid var(--panel-stroke);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.9);
+    color: var(--ink-strong);
+}
+.contact-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
 /* Print-only elements are hidden on screen (revealed by the print block). */
 .print-only {
     display: none;
@@ -475,7 +511,8 @@ textarea:focus {
     }
     .hero,
     .address-row,
-    .browse-status-row {
+    .browse-status-row,
+    .contact-panel {
         display: none !important;
     }
     .page-shell,
