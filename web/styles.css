@@ -459,3 +459,53 @@ textarea:focus {
         padding-top: 20px;
     }
 }
+
+/* Print-only elements are hidden on screen (revealed by the print block). */
+.print-only {
+    display: none;
+}
+
+/* ── Save to PDF ──────────────────────────────────────────────────────────
+   The "Save PDF" button calls window.print(); these rules strip the app chrome
+   so the browser's "Save as PDF" output is just the page text, with the page's
+   address as a header and each resolved link's destination shown inline. */
+@media print {
+    body {
+        background: #fff;
+    }
+    .hero,
+    .address-row,
+    .browse-status-row {
+        display: none !important;
+    }
+    .page-shell,
+    .browse-shell,
+    .page-panel,
+    .panel {
+        width: auto;
+        max-width: none;
+        margin: 0;
+        padding: 0;
+        border: none;
+        box-shadow: none;
+        background: #fff;
+    }
+    .print-only {
+        display: block;
+        margin: 0 0 0.75rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid #ccc;
+        font-size: 0.85rem;
+        color: #555;
+        word-break: break-all;
+    }
+    .page-content {
+        color: #000;
+    }
+    .page-content a[data-ref]::after {
+        content: " [" attr(href) "]";
+        font-size: 0.8em;
+        color: #555;
+        word-break: break-all;
+    }
+}

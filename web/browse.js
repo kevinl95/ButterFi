@@ -14,6 +14,8 @@ const elements = {
     addressInput: document.querySelector("#address-input"),
     goButton: document.querySelector("#go-button"),
     pageContent: document.querySelector("#page-content"),
+    pdfButton: document.querySelector("#pdf-button"),
+    printHeader: document.querySelector("#print-header"),
 };
 
 const device = new ButterfiDevice();
@@ -49,6 +51,9 @@ function updateButtons() {
     elements.addressInput.disabled = !connected;
     elements.goButton.disabled = !connected || loading || !elements.addressInput.value.trim();
     elements.backButton.disabled = nav.index <= 0 || loading;
+    // Save PDF is available whenever a completed page is on screen (even after
+    // disconnect) — it prints what's already rendered, no device needed.
+    elements.pdfButton.disabled = loading || nav.index < 0;
 }
 
 function showPlaceholder(message) {
@@ -273,6 +278,14 @@ elements.disconnectButton.addEventListener("click", () => {
 
 elements.goButton.addEventListener("click", () => {
     navigate(elements.addressInput.value);
+});
+
+elements.pdfButton.addEventListener("click", () => {
+    // Put the current page's address on the printed output, then let the
+    // browser's print dialog "Save as PDF". Print styles hide the app chrome.
+    const entry = nav.history[nav.index];
+    elements.printHeader.textContent = entry ? entry.query : (elements.addressInput.value || "");
+    window.print();
 });
 
 elements.addressInput.addEventListener("keydown", (event) => {
