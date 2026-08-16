@@ -152,6 +152,21 @@ static void set_usb_diag_led(uint8_t *slot)
 #if BUTTERFI_INCLUDE_SIDEWALK
 static struct sid_handle *sid_handle   = NULL;
 
+/* Beacon connection-request re-arm state. Per sid_api.h, the BLE beacon
+ * "please connect to me" flag must be set again by the app after EVERY dropped
+ * connection — the auto-connect policy only arms it for the initial link. So an
+ * idle-dropped FFN link (the gateway drops us after ~30s quiet) never comes
+ * back on its own: the device keeps advertising but without the connect flag,
+ * so the Echo has no reason to reconnect, and it sits NOT_READY until a power
+ * cycle re-runs sid_start. Fix: once we've been READY at least once, re-arm the
+ * request on each subsequent drop (and periodically while still down, since a
+ * gateway may not honor a single request). Gated on was_ready_once so the
+ * initial registration path is left exactly as-is. */
+static bool was_ready_once;
+static volatile bool reconnect_request_pending;
+static int64_t next_reconnect_arm_ms;
+#define BUTTERFI_RECONNECT_REARM_INTERVAL_MS 15000
+
 #define BUTTERFI_SIDEWALK_MSG_QUERY 0x01
 #define BUTTERFI_SIDEWALK_MSG_RESEND 0x02
 #define BUTTERFI_SIDEWALK_MSG_ACK 0x03
@@ -731,12 +746,20 @@ static void on_status_changed(const struct sid_status *status, void *context)
     case SID_STATE_SECURE_CHANNEL_READY:
         sidewalk_state = SIDEWALK_STATE_READY;
         current_led_state = LED_STATE_CONNECTED;
+        was_ready_once = true;
+        reconnect_request_pending = false;
         LOG_INF("Sidewalk READY — ButterFi online");
         break;
 
     case SID_STATE_NOT_READY:
         sidewalk_state = SIDEWALK_STATE_INIT;
         current_led_state = LED_STATE_CONNECTING;
+        /* Link dropped after being up — flag a beacon connect-request re-arm.
+         * Deferred to the main loop: sid_* APIs must not be called from inside
+         * this callback, which runs re-entrantly within sid_process(). */
+        if (was_ready_once) {
+            reconnect_request_pending = true;
+        }
         break;
 
     case SID_STATE_ERROR:
@@ -875,6 +898,48 @@ static int sidewalk_init(void)
 
     LOG_INF("Sidewalk stack started");
     return 0;
+}
+
+/* Re-arm the BLE beacon connection request when the link is down after having
+ * been up. Called from the main loop (never a Sidewalk callback). No-op until
+ * the first READY, so the initial registration/auto-connect path is untouched;
+ * once connected at least once, this is what pulls the device back from an
+ * idle-dropped link without a power cycle. Re-issues on the drop and then every
+ * BUTTERFI_RECONNECT_REARM_INTERVAL_MS while still down (a gateway may not
+ * honor a single request). */
+static void maybe_rearm_connection_request(void)
+{
+    int64_t now;
+    sid_error_t err;
+
+    if (sid_handle == NULL || !was_ready_once) {
+        return;
+    }
+
+    /* SIDEWALK_STATE_INIT here means "was ready, now NOT_READY" (the drop) —
+     * not registration issues (NOT_REGISTERED) or faults (ERROR/READY). */
+    if (sidewalk_state != SIDEWALK_STATE_INIT) {
+        return;
+    }
+
+    now = k_uptime_get();
+    if (!reconnect_request_pending && now < next_reconnect_arm_ms) {
+        return;
+    }
+
+    reconnect_request_pending = false;
+    next_reconnect_arm_ms = now + BUTTERFI_RECONNECT_REARM_INTERVAL_MS;
+
+    err = sid_ble_bcn_connection_request(sid_handle, true);
+    /* ALREADY_EXISTS just means a connection came up in the meantime — benign. */
+    if (err == SID_ERROR_NONE || err == SID_ERROR_ALREADY_EXISTS) {
+        (void)butterfi_usb_send_debug_text("reconn req armed");
+    } else {
+        char dbg[48];
+
+        (void)snprintk(dbg, sizeof(dbg), "reconn req err=%d", err);
+        (void)butterfi_usb_send_debug_text(dbg);
+    }
 }
 #endif
 
@@ -1122,6 +1187,8 @@ int main(void)
                 LOG_ERR("sid_process error: %d", err);
             }
         }
+
+        maybe_rearm_connection_request();
     }
 #else
     LOG_WRN("Sidewalk excluded from build");
