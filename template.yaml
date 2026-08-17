@@ -688,6 +688,27 @@ Resources:
           TEXT_CHUNK_SIZE = MAX_CHUNK - 4
 
 
+          def unwrap_ddg_redirect(url):
+              """DuckDuckGo result links are tracking redirects of the form
+              duckduckgo.com/l/?uddg=<percent-encoded-real-url>&rut=... The /l/
+              redirector doesn't serve a fetchable page to this scraper (the
+              fetch hangs), so return the real destination and fetch it directly.
+              parse_qs already percent-decodes the value once, which is exactly
+              right — the wrapper double-encodes the destination's own query."""
+              try:
+                  from urllib.parse import urlparse, parse_qs
+                  parsed = urlparse(url)
+                  host = parsed.netloc.lower()
+                  is_ddg = host == 'duckduckgo.com' or host.endswith('.duckduckgo.com')
+                  if is_ddg and parsed.path.rstrip('/') == '/l':
+                      uddg = parse_qs(parsed.query).get('uddg')
+                      if uddg and uddg[0].startswith(('http://', 'https://')):
+                          return uddg[0]
+              except Exception:
+                  pass
+              return url
+
+
           def html_to_butterfi(html, source_url=''):
               """Convert HTML to ButterFi markup — a compact, readable format
               that preserves document structure while minimizing byte count.
@@ -770,6 +791,8 @@ Resources:
                               if source_url and not href.startswith(('http://', 'https://')):
                                   from urllib.parse import urljoin
                                   self.link_href = urljoin(source_url, href)
+                              # Unwrap DuckDuckGo tracking redirects to the real URL
+                              self.link_href = unwrap_ddg_redirect(self.link_href)
 
                       elif tag == 'br':
                           self._flush_line()
@@ -919,7 +942,7 @@ Resources:
               """Fetch URL or search, return ButterFi markup."""
               q = query.strip()
               if q.startswith('http://') or q.startswith('https://'):
-                  url = q
+                  url = unwrap_ddg_redirect(q)  # a DDG /l/ wrapper -> real page
               elif ' ' not in q and BARE_DOMAIN.match(q):
                   url = 'https://' + q  # bare domain -> fetch, don't search
               else:
