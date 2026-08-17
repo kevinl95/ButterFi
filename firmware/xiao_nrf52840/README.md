@@ -59,7 +59,7 @@ firmware implements that contract directly in `src/main.c` and
 ```bash
 cd /home/mrmemory/ButterFi
 
-# Validated Sidewalk release runtime
+# Validated Sidewalk release runtime — STUDENT build (single USB port)
 export NCS_ENV_JSON=/path/to/ncs/toolchains/<toolchain-id>/environment.json
 export ZEPHYR_BASE=/path/to/ncs/<version>/zephyr
 export SIDEWALK_BASE=$HOME/sidewalk
@@ -68,12 +68,29 @@ BUTTERFI_INCLUDE_SIDEWALK=ON \
 BUTTERFI_EXTRA_CONF_FILE=prj.sidewalk.conf \
 ./scripts/build-xiao.sh rebuild
 
+# Field-debug: same runtime but the Sidewalk/Zephyr log comes out on a SECOND
+# USB CDC (/dev/ttyACM1). Adds a second device to the Web Serial picker, so it
+# is NOT for student units — use it to read the disconnect reason, registration
+# events, etc. (chains the two conf fragments; needs no other change).
+BUTTERFI_USB_CONTROL_DEBUG=OFF \
+BUTTERFI_INCLUDE_SIDEWALK=ON \
+BUTTERFI_EXTRA_CONF_FILE="prj.sidewalk.conf;prj.sidewalk-log.conf" \
+./scripts/build-xiao.sh rebuild
+
 # Optional: USB-control Sidewalk debug runtime
 BUTTERFI_USB_CONTROL_DEBUG=ON \
 BUTTERFI_INCLUDE_SIDEWALK=ON \
 BUTTERFI_EXTRA_CONF_FILE=prj.sidewalk-debug.conf \
 ./scripts/build-xiao.sh rebuild
 ```
+
+**Student build = one USB serial port.** The default `prj.sidewalk.conf` exposes
+only the ButterFi runtime CDC, so the browser's Web Serial picker shows exactly
+one device and a young student cannot pick the wrong one. The console + LOG are
+kept enabled (disabling them faults this board at boot) but routed to the
+hardware `uart0` pins — off the USB entirely, readable with a cheap USB-UART
+adapter if ever needed. `CONFIG_BUTTERFI_LOG_CDC` (set by `prj.sidewalk-log.conf`)
+flips this to the two-port field-debug layout.
 
 The helper build flow is documented in [docs/xiao-build.md](../../docs/xiao-build.md).
 

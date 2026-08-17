@@ -1,0 +1,21 @@
+# ButterFi application Kconfig.
+#
+# NOTE: because this app Kconfig exists, Zephyr uses it as the application's
+# root Kconfig — it MUST `source "Kconfig.zephyr"` at the end or the entire
+# Zephyr Kconfig tree disappears.
+
+config BUTTERFI_LOG_CDC
+	bool "Expose a second USB CDC ACM for console + LOG (field debug)"
+	default n
+	help
+	  When enabled, app.overlay instantiates a second USB CDC ACM interface
+	  (cdc_acm_uart1) and routes the Zephyr console + LOG backend to it, so
+	  Sidewalk/Zephyr logs surface as a second /dev/ttyACM for field debugging
+	  with no SWD probe.
+
+	  Leave disabled (the default) for student units: the browser's Web Serial
+	  device picker then shows exactly ONE device — the ButterFi runtime port —
+	  so a young student cannot pick the wrong one. Enable it via
+	  prj.sidewalk-log.conf, which also turns the console/UART LOG backend on.
+
+source "Kconfig.zephyr"
