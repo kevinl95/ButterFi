@@ -131,6 +131,23 @@ aws cloudformation deploy \
   --region us-east-1
 ```
 
+## Security checks
+
+Static security + correctness checks run in CI (the **Security & correctness**
+GitHub Action) and locally via the same script — they can't drift:
+
+```bash
+pip install -r scripts/security-requirements.txt   # cfn-lint, checkov, bandit
+./scripts/security-scan.sh
+```
+
+- **cfn-lint** — CloudFormation validity (hard gate)
+- **checkov** — CloudFormation security/misconfig (hard gate; accepted checks are
+  documented in [.checkov.yaml](.checkov.yaml))
+- **bandit** — Python SAST on the inline Lambda code (extracted from the
+  `Code.ZipFile:` blocks) plus `scripts/` — HIGH severity gates the build;
+  MEDIUM/LOW are advisory (e.g. the scraper's user-URL `urlopen` fetch surface).
+
 ## Parameters
 
 | Parameter              | Default              | Description                                  |
