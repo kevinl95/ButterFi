@@ -20,11 +20,22 @@
 #include <zephyr/fs/nvs.h>
 #include <zephyr/storage/flash_map.h>
 #include <zephyr/sys/reboot.h>
+#include <hal/nrf_clock.h>
 
 #include <string.h>
+#include <stdio.h>
+
+/* Guard against the build-flag footgun: BUTTERFI_USB_CONTROL_DEBUG defaults ON
+ * and its branch in main() precedes the Sidewalk branch, so a build that sets
+ * BUTTERFI_INCLUDE_SIDEWALK=ON but forgets BUTTERFI_USB_CONTROL_DEBUG=OFF
+ * silently produces Sidewalk-free firmware that still enumerates over USB. */
+#if BUTTERFI_USB_CONTROL_DEBUG && BUTTERFI_INCLUDE_SIDEWALK
+#error "Set BUTTERFI_USB_CONTROL_DEBUG=OFF when BUTTERFI_INCLUDE_SIDEWALK=ON; the USB-control-debug branch takes precedence and skips sidewalk_init()."
+#endif
 
 #if BUTTERFI_INCLUDE_SIDEWALK
 #include <pm_config.h>
+#include <zephyr/storage/flash_map.h>
 
 #include <sid_api.h>
 #include <sid_error.h>
@@ -77,6 +88,11 @@ static sidewalk_state_t sidewalk_state = SIDEWALK_STATE_INIT;
 
 #define BUTTERFI_MAX_TRANSFER_CHUNKS 255
 
+/* Bump to force a one-time settings_storage wipe on the next boot (see the
+ * maintenance block in main()). Currently 1: wipe the foreign NVS left behind
+ * when butterfi_config used to share flash with settings_storage. */
+#define BUTTERFI_SETTINGS_MAINT_GEN 1
+
 static bool usb_ready;
 static uint8_t active_request_id;
 static bool request_in_flight;
@@ -93,6 +109,36 @@ static volatile uint8_t usb_rx_error_led_ticks;
 static struct butterfi_usb_diag_counters last_usb_diag_snapshot;
 static volatile uint8_t boot_fingerprint_ticks = 40;
 
+/* One-line boot summary emitted over USB frame 0x87 (empty until populated in
+ * main()). Surfaces the actual LFCLK source — if it reads RC while the build
+ * configures Xtal/50ppm, the crystal isn't running and the controller is
+ * advertising the wrong SCA to the gateway — plus the resolved build flags so
+ * a Sidewalk-free build can't masquerade as a live one. */
+static char boot_info[80];
+static int boot_info_emits_remaining = 20;
+
+static void populate_boot_info(void)
+{
+    uint32_t lfstat = NRF_CLOCK->LFCLKSTAT;
+    uint32_t src = (lfstat & CLOCK_LFCLKSTAT_SRC_Msk) >> CLOCK_LFCLKSTAT_SRC_Pos;
+    bool running = (lfstat & CLOCK_LFCLKSTAT_STATE_Msk) != 0U;
+    const char *src_str = (src == 0U) ? "RC" : (src == 1U) ? "Xtal"
+                        : (src == 2U) ? "Synth" : "?";
+    uint32_t maint_gen = 0;
+    int gen_ret = butterfi_config_get_maint_gen(&maint_gen);
+
+    /* gen should read back as BUTTERFI_SETTINGS_MAINT_GEN on every boot after
+     * the first. gen=0 persisting across boots means the marker is not
+     * sticking (the settings wipe would then re-run each boot). gen=err means
+     * NVS did not mount. */
+    (void)snprintk(boot_info, sizeof(boot_info),
+                   "BOOT lfclk=%s,%s SW=%d DBG=%d gen=%s%u",
+                   src_str, running ? "run" : "STOPPED",
+                   (int)BUTTERFI_INCLUDE_SIDEWALK,
+                   (int)BUTTERFI_USB_CONTROL_DEBUG,
+                   (gen_ret == 0) ? "" : "err", (gen_ret == 0) ? maint_gen : 0);
+}
+
 static void set_usb_diag_led(uint8_t *slot)
 {
     host_frame_led_ticks = 0;
@@ -106,11 +152,29 @@ static void set_usb_diag_led(uint8_t *slot)
 #if BUTTERFI_INCLUDE_SIDEWALK
 static struct sid_handle *sid_handle   = NULL;
 
+/* Beacon connection-request re-arm state. Per sid_api.h, the BLE beacon
+ * "please connect to me" flag must be set again by the app after EVERY dropped
+ * connection — the auto-connect policy only arms it for the initial link. So an
+ * idle-dropped FFN link (the gateway drops us after ~30s quiet) never comes
+ * back on its own: the device keeps advertising but without the connect flag,
+ * so the Echo has no reason to reconnect, and it sits NOT_READY until a power
+ * cycle re-runs sid_start. Fix: once we've been READY at least once, re-arm the
+ * request on each subsequent drop (and periodically while still down, since a
+ * gateway may not honor a single request). Gated on was_ready_once so the
+ * initial registration path is left exactly as-is. */
+static bool was_ready_once;
+static volatile bool reconnect_request_pending;
+static int64_t next_reconnect_arm_ms;
+#define BUTTERFI_RECONNECT_REARM_INTERVAL_MS 15000
+
 #define BUTTERFI_SIDEWALK_MSG_QUERY 0x01
 #define BUTTERFI_SIDEWALK_MSG_RESEND 0x02
 #define BUTTERFI_SIDEWALK_MSG_ACK 0x03
 #define BUTTERFI_SIDEWALK_MSG_RESPONSE_CHUNK 0x81
-#define BUTTERFI_SIDEWALK_UPLINK_MAX_PAYLOAD 512
+/* Sidewalk BLE caps a single message at 255 bytes; our uplink adds a 2-byte
+ * header (type + request id), so the app payload must stay <= 253. A larger
+ * value would let the stack reject the message rather than our bounds check. */
+#define BUTTERFI_SIDEWALK_UPLINK_MAX_PAYLOAD 253
 
 #define MAX_TIME_SYNC_INTERVALS 4
 static uint16_t default_sync_intervals_h[MAX_TIME_SYNC_INTERVALS] = { 2, 4, 8, 12 };
@@ -120,6 +184,33 @@ static struct sid_time_sync_config default_time_sync_config = {
 };
 
 K_SEM_DEFINE(sidewalk_event_sem, 0, 1);
+
+/* Manufacturing-page (Sidewalk credential) write buffer. The UF2 bootloader
+ * on this hardware only accepts writes to its single known app region, so
+ * mfg_storage cannot be provisioned by merging it into a UF2 (see
+ * docs/hardware-validation-checklist.md). Instead the browser writes it here
+ * over the already-running USB runtime protocol. */
+static uint8_t mfg_write_buffer[PM_MFG_STORAGE_SIZE];
+static uint16_t mfg_write_received_len;
+
+static int write_mfg_storage(const uint8_t *data, size_t len)
+{
+    const struct flash_area *fa;
+    int rc;
+
+    rc = flash_area_open(PM_MFG_STORAGE_ID, &fa);
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = flash_area_erase(fa, 0, fa->fa_size);
+    if (rc == 0) {
+        rc = flash_area_write(fa, 0, data, len);
+    }
+
+    flash_area_close(fa);
+    return rc;
+}
 #endif
 
 static const char *sidewalk_unavailable_reason(void)
@@ -356,6 +447,70 @@ static void handle_host_frame(uint8_t frame_type,
         break;
     }
 
+    case BUTTERFI_USB_FRAME_HOST_MFG_WRITE: {
+#if BUTTERFI_INCLUDE_SIDEWALK
+        uint16_t chunk_offset;
+        uint16_t total_len;
+        uint16_t chunk_len;
+
+        if (payload_len < 4) {
+            (void)butterfi_usb_send_transfer_error(request_id,
+                                                   BUTTERFI_USB_ERROR_INVALID_HOST_FRAME,
+                                                   "mfg write frame too short");
+            break;
+        }
+
+        chunk_offset = payload[0] | (payload[1] << 8);
+        total_len = payload[2] | (payload[3] << 8);
+        chunk_len = payload_len - 4;
+
+        if (chunk_offset == 0) {
+            mfg_write_received_len = 0;
+        }
+
+        if (total_len == 0 || total_len > sizeof(mfg_write_buffer) ||
+            chunk_offset != mfg_write_received_len ||
+            (uint32_t)chunk_offset + chunk_len > total_len) {
+            (void)butterfi_usb_send_transfer_error(request_id,
+                                                   BUTTERFI_USB_ERROR_INVALID_HOST_FRAME,
+                                                   "mfg write out of sequence");
+            mfg_write_received_len = 0;
+            break;
+        }
+
+        memcpy(&mfg_write_buffer[chunk_offset], &payload[4], chunk_len);
+        mfg_write_received_len += chunk_len;
+
+        if (mfg_write_received_len < total_len) {
+            (void)butterfi_usb_send_uplink_accepted(request_id);
+            break;
+        }
+
+        mfg_write_received_len = 0;
+
+        if (write_mfg_storage(mfg_write_buffer, total_len) != 0) {
+            (void)butterfi_usb_send_transfer_error(request_id,
+                                                   BUTTERFI_USB_ERROR_MFG_WRITE_FAILED,
+                                                   "flash write failed");
+            break;
+        }
+
+        (void)butterfi_usb_send_mfg_write_ok(request_id, "mfg storage written");
+        LOG_INF("Sidewalk mfg_storage written (%u bytes); rebooting", total_len);
+        /* USB TX is asynchronous (drains from a ring buffer via UART IRQ),
+         * so give the ok frame above time to actually go out over the wire
+         * before resetting - otherwise the host never sees it. */
+        k_msleep(150);
+        sys_reboot(SYS_REBOOT_COLD);
+        break;
+#else
+        (void)butterfi_usb_send_transfer_error(request_id,
+                                               BUTTERFI_USB_ERROR_SIDEWALK_UNAVAILABLE,
+                                               "sidewalk not built in");
+        break;
+#endif
+    }
+
     case BUTTERFI_USB_FRAME_HOST_PING:
         note_usb_tx_result(butterfi_usb_send_pong(request_id, payload, payload_len), "pong");
         break;
@@ -549,9 +704,13 @@ static void on_send_error(sid_error_t error,
                           const struct sid_msg_desc *msg_desc,
                           void *context)
 {
+    char dbg[64];
+
     ARG_UNUSED(context);
 
     LOG_ERR("MSG TX ERR: %d (id=%u)", error, msg_desc->id);
+    (void)snprintk(dbg, sizeof(dbg), "SID send err=%d id=%u", error, msg_desc->id);
+    (void)butterfi_usb_send_debug_text(dbg);
     current_led_state = LED_STATE_CONNECTED;
 
     if (request_in_flight) {
@@ -564,23 +723,43 @@ static void on_send_error(sid_error_t error,
 
 static void on_status_changed(const struct sid_status *status, void *context)
 {
+    char dbg[96];
+
     LOG_INF("Sidewalk status: state=%d, reg=%d, time=%d, link_mask=0x%08x",
             status->state,
             status->detail.registration_status,
             status->detail.time_sync_status,
             status->detail.link_status_mask);
 
+    /* Mirror the Sidewalk status detail out over USB so it can be observed
+     * without a debug probe (the Zephyr console is disabled on this build). */
+    (void)snprintk(dbg, sizeof(dbg),
+                   "SID state=%d reg=%d time=%d linkmask=0x%08x",
+                   status->state,
+                   status->detail.registration_status,
+                   status->detail.time_sync_status,
+                   status->detail.link_status_mask);
+    (void)butterfi_usb_send_debug_text(dbg);
+
     switch (status->state) {
     case SID_STATE_READY:
     case SID_STATE_SECURE_CHANNEL_READY:
         sidewalk_state = SIDEWALK_STATE_READY;
         current_led_state = LED_STATE_CONNECTED;
+        was_ready_once = true;
+        reconnect_request_pending = false;
         LOG_INF("Sidewalk READY — ButterFi online");
         break;
 
     case SID_STATE_NOT_READY:
         sidewalk_state = SIDEWALK_STATE_INIT;
         current_led_state = LED_STATE_CONNECTING;
+        /* Link dropped after being up — flag a beacon connect-request re-arm.
+         * Deferred to the main loop: sid_* APIs must not be called from inside
+         * this callback, which runs re-entrantly within sid_process(). */
+        if (was_ready_once) {
+            reconnect_request_pending = true;
+        }
         break;
 
     case SID_STATE_ERROR:
@@ -655,15 +834,21 @@ static int sidewalk_init(void)
         .qualification_id = 0x0001,
     };
 
-    struct sid_config config = {
-        .link_mask = SID_LINK_TYPE_1,
-        .dev_ch = dev_ch,
-        .callbacks = &sidewalk_callbacks,
-        .link_config = app_get_ble_config(),
-        .sub_ghz_link_config = NULL,
-        .log_config = NULL,
-        .time_sync_config = &default_time_sync_config,
-    };
+    /* The Sidewalk stack retains the pointer passed to sid_init(), so this
+     * config (like the callbacks it references) must live in static storage,
+     * not on sidewalk_init()'s stack — otherwise it is a use-after-scope once
+     * this function returns, which manifests as the stack silently doing
+     * nothing (no crash, no error). Assigned at runtime because
+     * app_get_ble_config() is not a constant initializer. */
+    static struct sid_config config;
+
+    config.link_mask = SID_LINK_TYPE_1;
+    config.dev_ch = dev_ch;
+    config.callbacks = &sidewalk_callbacks;
+    config.link_config = app_get_ble_config();
+    config.sub_ghz_link_config = NULL;
+    config.log_config = NULL;
+    config.time_sync_config = &default_time_sync_config;
 
     ret = sidewalk_platform_init_once();
     if (ret < 0) {
@@ -682,8 +867,79 @@ static int sidewalk_init(void)
         return -EFAULT;
     }
 
+    /* Ask the stack to actively establish and hold a BLE gateway connection.
+     * Without an auto-connect policy the device only passively accepts brief
+     * gateway connections, which drop before time sync / registration can
+     * complete — so it never leaves SID_STATUS_NOT_REGISTERED. This mirrors
+     * the CONFIG_SID_END_DEVICE_AUTO_CONN_REQ path in the Nordic
+     * sid_end_device reference sample. */
+    {
+        enum sid_link_connection_policy conn_policy =
+            SID_LINK_CONNECTION_POLICY_AUTO_CONNECT;
+        struct sid_link_auto_connect_params ac_params = {
+            .link_type = SID_LINK_TYPE_1,
+            .enable = true,
+            .priority = 0,
+            .connection_attempt_timeout_seconds = 30,
+        };
+
+        err = sid_option(sid_handle, SID_OPTION_SET_LINK_CONNECTION_POLICY,
+                         &conn_policy, sizeof(conn_policy));
+        if (err != SID_ERROR_NONE) {
+            LOG_ERR("set connection policy failed: %d", err);
+        }
+
+        err = sid_option(sid_handle, SID_OPTION_SET_LINK_POLICY_AUTO_CONNECT_PARAMS,
+                         &ac_params, sizeof(ac_params));
+        if (err != SID_ERROR_NONE) {
+            LOG_ERR("set auto-connect params failed: %d", err);
+        }
+    }
+
     LOG_INF("Sidewalk stack started");
     return 0;
+}
+
+/* Re-arm the BLE beacon connection request when the link is down after having
+ * been up. Called from the main loop (never a Sidewalk callback). No-op until
+ * the first READY, so the initial registration/auto-connect path is untouched;
+ * once connected at least once, this is what pulls the device back from an
+ * idle-dropped link without a power cycle. Re-issues on the drop and then every
+ * BUTTERFI_RECONNECT_REARM_INTERVAL_MS while still down (a gateway may not
+ * honor a single request). */
+static void maybe_rearm_connection_request(void)
+{
+    int64_t now;
+    sid_error_t err;
+
+    if (sid_handle == NULL || !was_ready_once) {
+        return;
+    }
+
+    /* SIDEWALK_STATE_INIT here means "was ready, now NOT_READY" (the drop) —
+     * not registration issues (NOT_REGISTERED) or faults (ERROR/READY). */
+    if (sidewalk_state != SIDEWALK_STATE_INIT) {
+        return;
+    }
+
+    now = k_uptime_get();
+    if (!reconnect_request_pending && now < next_reconnect_arm_ms) {
+        return;
+    }
+
+    reconnect_request_pending = false;
+    next_reconnect_arm_ms = now + BUTTERFI_RECONNECT_REARM_INTERVAL_MS;
+
+    err = sid_ble_bcn_connection_request(sid_handle, true);
+    /* ALREADY_EXISTS just means a connection came up in the meantime — benign. */
+    if (err == SID_ERROR_NONE || err == SID_ERROR_ALREADY_EXISTS) {
+        (void)butterfi_usb_send_debug_text("reconn req armed");
+    } else {
+        char dbg[48];
+
+        (void)snprintk(dbg, sizeof(dbg), "reconn req err=%d", err);
+        (void)butterfi_usb_send_debug_text(dbg);
+    }
 }
 #endif
 
@@ -768,6 +1024,12 @@ K_THREAD_DEFINE(led_tid, LED_STACK_SIZE,
                 LED_PRIORITY, 0, 0);
 
 /* ── USB service thread ─────────────────────────────────────────────────── */
+/* This thread now only emits the 1 Hz status + boot-info frames — it no longer
+ * polls or handles host frames (the main thread is the sole poller). Its peak
+ * is one send_frame (~519B frame buffer) + call overhead, so 1024 is ample.
+ * The big config-save/query buffers that once overflowed 1024 here now live on
+ * the main thread's stack instead (CONFIG_MAIN_STACK_SIZE, bumped to 8192).
+ * THREAD_ANALYZER reports the real high-water marks within 30s of boot. */
 #define USB_STACK_SIZE 1024
 #define USB_PRIORITY   -1
 
@@ -780,14 +1042,22 @@ static void usb_thread_fn(void *a, void *b, void *c)
     ARG_UNUSED(c);
 
     while (1) {
-        if (usb_ready) {
-            butterfi_usb_poll();
-            poll_usb_diag_counters();
-
-            if (k_uptime_get() >= next_usb_status_ms) {
-                (void)butterfi_usb_send_status();
-                next_usb_status_ms = k_uptime_get() + 1000;
+        /* NOTE: this thread does NOT call butterfi_usb_poll(). RX parsing and
+         * host-frame handling run only on the main thread (see the Sidewalk
+         * loop / run_usb_control_loop), so there is a single owner of the RX
+         * ring and parser state — and so host frames that issue Sidewalk API
+         * calls run in the same context as sid_process(). This thread only
+         * emits periodic TX (serialized by tx_mutex in butterfi_usb.c). */
+        if (usb_ready && k_uptime_get() >= next_usb_status_ms) {
+            (void)butterfi_usb_send_status();
+            /* Emit the boot summary only for the first ~20s so a watcher that
+             * attaches shortly after boot still catches it, without flooding
+             * the debug channel during later protocol tests. */
+            if (boot_info[0] != '\0' && boot_info_emits_remaining > 0) {
+                (void)butterfi_usb_send_debug_text(boot_info);
+                boot_info_emits_remaining--;
             }
+            next_usb_status_ms = k_uptime_get() + 1000;
         }
 
         k_msleep(20);
@@ -837,6 +1107,51 @@ int main(void)
         refresh_usb_status();
     }
 
+#if BUTTERFI_INCLUDE_SIDEWALK
+    /* One-time maintenance: earlier firmware mounted butterfi_config's NVS on
+     * the DTS storage_partition, which physically overlaps settings_storage
+     * (where the Sidewalk stack persists its registration/time-sync key
+     * store). That left a foreign NVS filesystem inside settings_storage that
+     * the Sidewalk NVS still mounts and reads as stale/garbage state. Wipe it
+     * once — before sidewalk_init() so Sidewalk mounts a clean store — then
+     * never again. Runs pre-radio, so no flash/radio contention here.
+     *
+     * Fail closed: record the new generation FIRST and verify it stuck; only
+     * then wipe. A wipe we cannot record is a wipe we must not perform — the
+     * alternative is a unit that silently erases the Sidewalk key store on
+     * every boot and can never register. */
+    {
+        uint32_t maint_gen = 0;
+
+        if (butterfi_config_get_maint_gen(&maint_gen) == 0 &&
+            maint_gen < BUTTERFI_SETTINGS_MAINT_GEN) {
+            uint32_t check = 0;
+
+            if (butterfi_config_set_maint_gen(BUTTERFI_SETTINGS_MAINT_GEN) == 0 &&
+                butterfi_config_get_maint_gen(&check) == 0 &&
+                check == BUTTERFI_SETTINGS_MAINT_GEN) {
+                const struct flash_area *fa;
+
+                if (flash_area_open(PM_SETTINGS_STORAGE_ID, &fa) == 0) {
+                    int erase_ret = flash_area_erase(fa, 0, fa->fa_size);
+
+                    flash_area_close(fa);
+                    LOG_WRN("Wiped stale settings_storage (gen %u->%u): %d",
+                            maint_gen, BUTTERFI_SETTINGS_MAINT_GEN, erase_ret);
+                }
+            } else {
+                LOG_ERR("Skipping settings_storage wipe: cannot persist marker");
+            }
+        }
+    }
+#endif
+
+    /* Capture LFCLK source + build flags + the maintenance generation for the
+     * 0x87 boot summary. Done AFTER the wipe so gen reflects the persisted
+     * marker — if it ever reads back 0 on a later boot, the marker is not
+     * sticking (the fail-open wipe hazard). */
+    populate_boot_info();
+
 #if BUTTERFI_USB_CONTROL_DEBUG
     LOG_WRN("USB control debug build active - Sidewalk startup skipped");
     sidewalk_state = SIDEWALK_STATE_NOT_REGISTERED;
@@ -872,6 +1187,8 @@ int main(void)
                 LOG_ERR("sid_process error: %d", err);
             }
         }
+
+        maybe_rearm_connection_request();
     }
 #else
     LOG_WRN("Sidewalk excluded from build");

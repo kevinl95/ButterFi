@@ -34,7 +34,8 @@ Chromebook ←WebSerial→ ButterFi Dongle ←Sidewalk→ Neighbor's Echo ←Int
 ## Current Tracks
 
 - Active firmware target: Seeed XIAO nRF52840 in [firmware/xiao_nrf52840/](firmware/xiao_nrf52840)
-- Browser console for the runtime device protocol: [web/](web)
+- Student text-only browser: [web/browse.html](web/browse.html)
+- Technical Web Serial console for the runtime device protocol: [web/index.html](web/index.html)
 - Browser provisioning and web-flash prototype: [web/provision.html](web/provision.html)
 - Cloud stack: [template.yaml](template.yaml)
 
@@ -104,11 +105,14 @@ The checked-in helper script is [scripts/build-xiao.sh](scripts/build-xiao.sh). 
 
 For quick post-flash USB sanity checks, the firmware guide also documents two optional probe scripts in [firmware/xiao_nrf52840/README.md](firmware/xiao_nrf52840/README.md).
 
+For the full real-hardware, real-Sidewalk, real-AWS-stack round trip that this repo has not yet run, follow [docs/hardware-validation-checklist.md](docs/hardware-validation-checklist.md).
+
 ## Browser Tools
 
-The browser-side tools live in [web/README.md](web/README.md). There are currently two entry points:
+The browser-side tools live in [web/README.md](web/README.md). There are three entry points:
 
-- [web/index.html](web/index.html): runtime serial console for the binary ButterFi protocol
+- [web/browse.html](web/browse.html): the student-facing text-only browser — address bar, rendered ButterFi markup with clickable links, and back navigation
+- [web/index.html](web/index.html): technical runtime serial console for the binary ButterFi protocol (status, manual resend, session log)
 - [web/provision.html](web/provision.html): XIAO provisioning and web-flash prototype, with single-device self-hosted setup, optional batch-package support, and post-flash runtime config save over USB serial
 
 ## Deploy
@@ -126,6 +130,23 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```
+
+## Security checks
+
+Static security + correctness checks run in CI (the **Security & correctness**
+GitHub Action) and locally via the same script — they can't drift:
+
+```bash
+pip install -r scripts/security-requirements.txt   # cfn-lint, checkov, bandit
+./scripts/security-scan.sh
+```
+
+- **cfn-lint** — CloudFormation validity (hard gate)
+- **checkov** — CloudFormation security/misconfig (hard gate; accepted checks are
+  documented in [.checkov.yaml](.checkov.yaml))
+- **bandit** — Python SAST on the inline Lambda code (extracted from the
+  `Code.ZipFile:` blocks) plus `scripts/` — HIGH severity gates the build;
+  MEDIUM/LOW are advisory (e.g. the scraper's user-URL `urlopen` fetch surface).
 
 ## Parameters
 

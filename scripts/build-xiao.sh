@@ -94,13 +94,30 @@ resolve_optional_path() {
     fi
 }
 
+# Resolve a ';'-separated list of conf fragments (Zephyr's EXTRA_CONF_FILE
+# accepts a ';' list), prefixing APP_DIR to each relative entry. Lets the
+# field-debug build chain fragments, e.g.
+#   BUTTERFI_EXTRA_CONF_FILE="prj.sidewalk.conf;prj.sidewalk-log.conf"
+resolve_conf_list() {
+    local value="$1" out="" entry
+    if [[ -z "$value" ]]; then
+        return 0
+    fi
+    local IFS=';'
+    for entry in $value; do
+        [[ -z "$entry" ]] && continue
+        out+="${out:+;}$(resolve_optional_path "$entry")"
+    done
+    printf '%s' "$out"
+}
+
 configure_build() {
     local extra_conf_path=""
     local cmake_args=()
 
     require_paths
 
-    extra_conf_path="$(resolve_optional_path "$EXTRA_CONF_FILE")"
+    extra_conf_path="$(resolve_conf_list "$EXTRA_CONF_FILE")"
 
     if [[ -n "$extra_conf_path" ]]; then
         cmake_args+=("-DEXTRA_CONF_FILE=$extra_conf_path")

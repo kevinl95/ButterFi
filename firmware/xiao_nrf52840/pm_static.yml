@@ -4,7 +4,19 @@ softdevice_reserved:
 
 app:
   address: 0x27000
-  size: 0xC4000
+  size: 0xC1000
+
+# Dedicated NVS store for ButterFi runtime config (school_id, device_name,
+# content_pkg). MUST be separate from settings_storage: the Sidewalk stack
+# persists its registration/time-sync key store in settings_storage via
+# CONFIG_SETTINGS_NVS, and butterfi_config.c mounts its own NVS instance.
+# Previously butterfi_config used the DTS `storage_partition` (0xEC000), which
+# is the same flash as settings_storage — so butterfi_config_load(), which
+# runs before sidewalk_init() and writes NVS sector headers on mount, stomped
+# Sidewalk's key store on every boot. 3 sectors = 0x3000.
+butterfi_storage:
+  address: 0xE8000
+  size: 0x3000
 
 mfg_storage:
   address: 0xEB000

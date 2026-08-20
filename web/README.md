@@ -1,11 +1,16 @@
 # Web Tools
 
-This directory now contains two browser-side tools:
+This directory contains three browser-side tools, all sharing the ButterFi
+USB transport in [protocol.js](./protocol.js):
 
-- `index.html`: the existing Chrome Web Serial console for the ButterFi USB framing protocol
+- `browse.html`: the student-facing text-only browser — address bar, rendered
+  pages, clickable links, back navigation
+- `index.html`: the technical Web Serial console for the raw ButterFi USB
+  framing protocol (status, manual resend, session log)
 - `provision.html`: the XIAO provisioning and web-flash flow
 
-The console is packaged as a small installable PWA with an offline app shell.
+Both `browse.html` and `index.html` are packaged as a small installable PWA
+with an offline app shell.
 
 ## Serve Locally
 
@@ -15,10 +20,11 @@ Web Serial requires a secure context. The simplest local option is localhost:
 python3 -m http.server 4173 --directory web
 ```
 
-Then open either:
+Then open any of:
 
 ```text
-http://localhost:4173
+http://localhost:4173/browse.html
+http://localhost:4173/index.html
 http://localhost:4173/provision.html
 ```
 
@@ -26,7 +32,26 @@ For end users, the same pages can be hosted on GitHub Pages or any other
 HTTPS static host. Chromium-based browsers treat `https://` as a secure
 context for Web Serial.
 
+## Browse (student entry point)
+
+`browse.html` is the primary student-facing page. It renders the ButterFi
+markup format produced by the scraper Lambda (`html_to_butterfi` in
+[template.yaml](../template.yaml)) — headings, lists, rules, and inline
+`>N[text]` link references — into an actual readable page instead of raw
+text.
+
+- an address-bar-style input accepts either a URL or search terms (the
+  scraper treats a bare `http(s)://` string as a direct fetch and anything
+  else as a search)
+- clicking a rendered link issues it as the next query and pushes the
+  current page onto an in-memory history stack
+- the back button replays an already-fetched page from that history with no
+  new network round trip
+- markup parsing/rendering lives in [butterfi-markup.js](./butterfi-markup.js)
+
 ## Runtime Console
+
+`index.html` is the technical debug console, unchanged in behavior:
 
 - connects to the ButterFi USB CDC ACM serial port
 - sends host query, status, cancel, and resend frames
@@ -36,7 +61,10 @@ context for Web Serial.
 - registers a service worker to cache the app shell for offline launch
 - exposes the Chromium install prompt when the browser decides the app is installable
 
-The runtime console still assumes the binary ButterFi USB framing protocol from
+Both `browse.html` and `index.html` share the same USB framing, Web Serial
+connection handling, and chunk assembly through
+[protocol.js](./protocol.js)'s `ButterfiDevice`, which implements the binary
+ButterFi USB framing protocol from
 [docs/shared-protocol.md](../docs/shared-protocol.md).
 
 ## Provisioning

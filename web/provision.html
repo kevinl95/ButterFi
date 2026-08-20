@@ -8,38 +8,65 @@
   @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500&display=swap');
 
   :root {
-    --butter: #F5C842;
-    --butter-dark: #D4A820;
-    --ink: #1A1A1A;
-    --paper: #FAFAF5;
-    --warm-gray: #E8E5DC;
-    --muted: #7A7A6A;
-    --success: #3DAA6E;
-    --error: #D94F4F;
+    --wing-sun: #ffb43c;
+    --wing-coral: #ff7a30;
+    --wing-shadow: #d75b1d;
+    --canopy: #0f6c68;
+    --canopy-dark: #094947;
+    --ink: #19343a;
+    --paper: rgba(255, 255, 255, 0.96);
+    --mist: #ecf7fb;
+    --sky: #f2fbff;
+    --sky-deep: #dff1fb;
+    --line: rgba(25, 52, 58, 0.14);
+    --muted: #637c84;
+    --success: #1d8f68;
+    --error: #c74b4b;
+    --shadow-lg: 0 30px 80px rgba(26, 72, 84, 0.18);
+    --shadow-sm: 0 12px 24px rgba(26, 72, 84, 0.12);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
   body {
     font-family: 'DM Sans', sans-serif;
-    background: var(--paper);
+    background:
+      radial-gradient(circle at top left, rgba(255, 180, 60, 0.24), transparent 28%),
+      radial-gradient(circle at top right, rgba(15, 108, 104, 0.18), transparent 24%),
+      linear-gradient(180deg, #f9fdff 0%, #edf8ff 46%, #f7fdf7 100%);
     color: var(--ink);
     min-height: 100vh;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    padding: 2rem 1rem;
+    justify-content: flex-start;
+    padding: 2rem 1rem 3rem;
   }
 
-  /* Subtle dot-grid background */
   body::before {
     content: '';
     position: fixed;
     inset: 0;
-    background-image: radial-gradient(circle, #C8C5B8 1px, transparent 1px);
-    background-size: 28px 28px;
-    opacity: 0.4;
+    background:
+      radial-gradient(circle at 15% 18%, rgba(255, 122, 48, 0.16), transparent 0 90px),
+      radial-gradient(circle at 84% 14%, rgba(15, 108, 104, 0.12), transparent 0 110px),
+      radial-gradient(circle, rgba(25, 52, 58, 0.08) 1px, transparent 1px);
+    background-size: auto, auto, 26px 26px;
+    opacity: 0.75;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    top: 8%;
+    right: -80px;
+    width: 260px;
+    height: 260px;
+    border-radius: 54% 46% 50% 50%;
+    background: radial-gradient(circle at 35% 40%, rgba(255, 180, 60, 0.28), rgba(255, 122, 48, 0.08) 68%, transparent 70%);
+    filter: blur(18px);
     pointer-events: none;
     z-index: 0;
   }
@@ -47,128 +74,196 @@
   .card {
     position: relative;
     z-index: 1;
-    background: white;
-    border: 2px solid var(--ink);
-    border-radius: 2px;
-    padding: 2.5rem 2.5rem 2rem;
-    max-width: 480px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 34px;
+    overflow: hidden;
+    max-width: 980px;
     width: 100%;
-    box-shadow: 6px 6px 0 var(--ink);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .hero-band {
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.85fr);
+    gap: 1.5rem;
+    padding: 2rem 2rem 1.5rem;
+    background:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(236, 247, 251, 0.92)),
+      linear-gradient(180deg, rgba(255, 180, 60, 0.08), rgba(15, 108, 104, 0.05));
+    border-bottom: 1px solid var(--line);
+  }
+
+  .hero-band > * {
+    min-width: 0;
   }
 
   .logo-row {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-bottom: 2rem;
+    display: grid;
+    gap: 1rem;
+    min-width: 0;
   }
 
-  .logo-icon {
-    width: 36px;
-    height: 36px;
-    background: var(--butter);
-    border: 2px solid var(--ink);
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    flex-shrink: 0;
+  .logo-mark {
+    width: fit-content;
+    max-width: 100%;
+    padding: 0.8rem 0.95rem;
+    border-radius: 24px;
+    background: linear-gradient(145deg, rgba(255, 180, 60, 0.24), rgba(255, 122, 48, 0.12));
+    box-shadow: inset 0 0 0 1px rgba(255, 122, 48, 0.14);
   }
 
-  .logo-text {
+  .logo-image {
+    display: block;
+    width: min(100%, 440px);
+    max-width: 100%;
+    height: auto;
+  }
+
+  .brand-copy {
+    display: grid;
+    gap: 0.65rem;
+    padding-top: 0.15rem;
+  }
+
+  .eyebrow {
     font-family: 'Space Mono', monospace;
-    font-size: 1.25rem;
+    font-size: 0.72rem;
     font-weight: 700;
-    letter-spacing: -0.02em;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--canopy);
   }
 
-  .logo-text span {
-    color: var(--butter-dark);
+  .hero-copy {
+    font-size: 1rem;
+    line-height: 1.7;
+    color: var(--muted);
+    max-width: 58ch;
+  }
+
+  .hero-note {
+    align-self: stretch;
+    padding: 1.15rem 1.2rem;
+    border-radius: 26px;
+    background: linear-gradient(180deg, rgba(15, 108, 104, 0.08), rgba(255, 180, 60, 0.08));
+    border: 1px solid rgba(15, 108, 104, 0.12);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  }
+
+  .hero-note-label {
+    display: inline-block;
+    margin-bottom: 0.7rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: var(--canopy-dark);
+  }
+
+  .hero-note p {
+    font-size: 0.92rem;
+    line-height: 1.65;
+    color: var(--ink);
+  }
+
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.8rem;
+    padding: 1.4rem 2rem 0;
+  }
+
+  .step {
+    padding: 0.7rem 0.9rem;
+    text-align: center;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--muted);
+    background: rgba(255, 255, 255, 0.82);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    transition: background 0.2s, color 0.2s, transform 0.2s;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .step.active {
+    background: linear-gradient(135deg, rgba(255, 180, 60, 0.92), rgba(255, 122, 48, 0.9));
+    color: #102428;
+    border-color: transparent;
+    box-shadow: var(--shadow-sm);
+    transform: translateY(-1px);
+  }
+
+  .step.done {
+    background: var(--canopy-dark);
+    color: #edf9f7;
+    border-color: transparent;
+  }
+
+  .panel {
+    display: none;
+    padding: 1.8rem 2rem 2.1rem;
+    animation: fadeIn 0.2s ease;
+  }
+
+  .panel.active { display: block; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 
   h1 {
     font-family: 'Space Mono', monospace;
-    font-size: 1.05rem;
+    font-size: clamp(1.2rem, 2vw, 1.5rem);
     font-weight: 700;
-    margin-bottom: 0.4rem;
-    letter-spacing: -0.01em;
+    margin-bottom: 0.55rem;
+    letter-spacing: -0.02em;
   }
 
   .subtitle {
-    font-size: 0.875rem;
+    font-size: 0.95rem;
     color: var(--muted);
-    margin-bottom: 2rem;
-    line-height: 1.5;
+    margin-bottom: 1.7rem;
+    line-height: 1.7;
+    max-width: 72ch;
   }
 
-  /* Step indicator */
-  .steps {
-    display: flex;
-    gap: 0;
-    margin-bottom: 2rem;
-    border: 1.5px solid var(--ink);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-
-  .step {
-    flex: 1;
-    padding: 0.5rem 0.25rem;
-    text-align: center;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.65rem;
-    font-weight: 700;
-    color: var(--muted);
-    border-right: 1.5px solid var(--ink);
-    transition: background 0.2s, color 0.2s;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
-  }
-
-  .step:last-child { border-right: none; }
-
-  .step.active {
-    background: var(--butter);
-    color: var(--ink);
-  }
-
-  .step.done {
-    background: var(--ink);
-    color: var(--butter);
-  }
-
-  /* Form fields */
   .field {
     margin-bottom: 1.25rem;
   }
 
   .field-help {
-    margin-top: 0.45rem;
-    font-size: 0.8rem;
+    margin-top: 0.5rem;
+    font-size: 0.83rem;
     color: var(--muted);
-    line-height: 1.5;
+    line-height: 1.55;
   }
 
   code {
     font-family: 'Space Mono', monospace;
-    font-size: 0.78em;
-    background: var(--warm-gray);
-    padding: 1px 4px;
-    border-radius: 2px;
+    font-size: 0.8em;
+    background: var(--mist);
+    padding: 1px 5px;
+    border-radius: 6px;
   }
 
   .batch-card {
-    border: 1.5px solid var(--ink);
-    border-radius: 2px;
-    background: white;
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(236, 247, 251, 0.9));
     padding: 1rem;
-    margin-bottom: 1.5rem;
+    margin-bottom: 1.35rem;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88);
   }
 
   .batch-title {
     font-family: 'Space Mono', monospace;
-    font-size: 0.9rem;
+    font-size: 0.92rem;
     font-weight: 700;
     margin-bottom: 0.25rem;
   }
@@ -184,16 +279,16 @@
   .summary-pills {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.4rem;
+    gap: 0.45rem;
     justify-content: flex-end;
   }
 
   .summary-pill {
     display: inline-block;
-    padding: 0.22rem 0.5rem;
-    border: 1.5px solid var(--ink);
-    border-radius: 2px;
-    background: var(--warm-gray);
+    padding: 0.26rem 0.56rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: rgba(15, 108, 104, 0.08);
     font-family: 'Space Mono', monospace;
     font-size: 0.65rem;
     font-weight: 700;
@@ -203,53 +298,59 @@
   .inline-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 0.6rem;
-    margin-top: 0.75rem;
+    gap: 0.65rem;
+    margin-top: 0.8rem;
   }
 
   .btn.tertiary {
     width: auto;
-    padding: 0.55rem 0.9rem;
-    background: white;
+    padding: 0.68rem 1rem;
+    background: rgba(255, 255, 255, 0.88);
     color: var(--ink);
-    box-shadow: 3px 3px 0 var(--warm-gray);
-    font-size: 0.72rem;
+    box-shadow: inset 0 0 0 1px var(--line);
+    font-size: 0.74rem;
   }
 
   .btn.tertiary:hover {
-    background: var(--warm-gray);
-    box-shadow: 4px 4px 0 var(--ink);
+    background: white;
+    box-shadow: inset 0 0 0 1px rgba(25, 52, 58, 0.22), var(--shadow-sm);
   }
 
   label {
     display: block;
     font-family: 'Space Mono', monospace;
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
     color: var(--muted);
-    margin-bottom: 0.4rem;
+    margin-bottom: 0.45rem;
   }
 
   input, select {
     width: 100%;
-    padding: 0.65rem 0.75rem;
-    border: 1.5px solid var(--ink);
-    border-radius: 2px;
+    padding: 0.8rem 0.95rem;
+    border: 1px solid var(--line);
+    border-radius: 16px;
     font-family: 'DM Sans', sans-serif;
-    font-size: 0.95rem;
-    background: var(--paper);
+    font-size: 0.96rem;
+    background: rgba(242, 251, 255, 0.82);
     color: var(--ink);
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
     outline: none;
     -webkit-appearance: none;
     appearance: none;
   }
 
+  input[type="file"] {
+    background: rgba(255, 255, 255, 0.94);
+    padding: 0.72rem 0.9rem;
+  }
+
   input:focus, select:focus {
-    border-color: var(--butter-dark);
-    box-shadow: 3px 3px 0 var(--butter);
+    border-color: rgba(255, 122, 48, 0.6);
+    box-shadow: 0 0 0 4px rgba(255, 180, 60, 0.18);
+    background: white;
   }
 
   .select-wrap {
@@ -259,7 +360,7 @@
   .select-wrap::after {
     content: '▾';
     position: absolute;
-    right: 0.75rem;
+    right: 1rem;
     top: 50%;
     transform: translateY(-50%);
     pointer-events: none;
@@ -267,47 +368,45 @@
     color: var(--muted);
   }
 
-  /* Panel sections */
-  .panel {
-    display: none;
-    animation: fadeIn 0.2s ease;
-  }
-
-  .panel.active { display: block; }
-
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(4px); }
-    to   { opacity: 1; transform: translateY(0); }
-  }
-
-  /* Instruction box */
   .instruction-box {
-    background: var(--warm-gray);
-    border: 1.5px solid var(--ink);
-    border-radius: 2px;
-    padding: 1rem 1rem;
-    margin-bottom: 1.5rem;
-    font-size: 0.875rem;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(236, 247, 251, 0.88));
+    border: 1px solid var(--line);
+    border-radius: 24px;
+    padding: 1.15rem 1.2rem;
+    font-size: 0.9rem;
     line-height: 1.6;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.88);
+  }
+
+  .instruction-title {
+    margin-bottom: 0.85rem;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.84rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--canopy-dark);
   }
 
   .instruction-box .step-num {
-    display: inline-block;
-    background: var(--ink);
-    color: var(--butter);
+    display: inline-grid;
+    place-items: center;
+    min-width: 1.7rem;
+    height: 1.7rem;
+    background: var(--canopy-dark);
+    color: white;
     font-family: 'Space Mono', monospace;
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     font-weight: 700;
-    padding: 1px 6px;
-    border-radius: 2px;
-    margin-right: 6px;
+    border-radius: 999px;
+    margin-right: 0.65rem;
+    flex-shrink: 0;
   }
 
   .instruction-box p {
-    margin-bottom: 0.6rem;
+    margin-bottom: 0.7rem;
     display: flex;
     align-items: flex-start;
-    gap: 0;
   }
 
   .instruction-box p:last-child { margin-bottom: 0; }
@@ -315,51 +414,125 @@
   kbd {
     display: inline-block;
     background: white;
-    border: 1.5px solid var(--ink);
-    border-radius: 3px;
-    padding: 1px 6px;
+    border: 1px solid rgba(25, 52, 58, 0.16);
+    border-radius: 8px;
+    padding: 1px 7px;
     font-family: 'Space Mono', monospace;
     font-size: 0.75rem;
-    box-shadow: 2px 2px 0 var(--ink);
+    box-shadow: 0 2px 8px rgba(25, 52, 58, 0.08);
     margin: 0 2px;
   }
 
-  /* Drive picker */
+  .flash-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+    gap: 1.2rem;
+    align-items: start;
+  }
+
+  .flash-guide {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .flash-hint .step-num {
+    background: linear-gradient(135deg, var(--wing-sun), var(--wing-coral));
+    color: #102428;
+  }
+
+  .flash-surface {
+    padding: 1rem;
+    border-radius: 26px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(242, 251, 255, 0.92));
+    border: 1px solid var(--line);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  }
+
+  .picker-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 0.8rem;
+    margin-bottom: 0.9rem;
+  }
+
+  .picker-title {
+    font-family: 'Space Mono', monospace;
+    font-size: 0.9rem;
+    font-weight: 700;
+    margin-bottom: 0.35rem;
+  }
+
+  .picker-copy {
+    color: var(--muted);
+    font-size: 0.88rem;
+    line-height: 1.6;
+  }
+
   .drive-list {
-    border: 1.5px solid var(--ink);
-    border-radius: 2px;
+    border: 1px dashed rgba(25, 52, 58, 0.22);
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.95);
     overflow: hidden;
-    margin-bottom: 1.5rem;
+    margin-bottom: 1.15rem;
+    min-height: 8.2rem;
+  }
+
+  .picker-empty {
+    padding: 1.45rem 1.15rem;
+    text-align: center;
+    display: grid;
+    gap: 0.85rem;
+  }
+
+  .picker-empty p {
+    color: var(--muted);
+    font-size: 0.9rem;
+    line-height: 1.65;
+  }
+
+  .btn-picker {
+    width: auto;
+    margin: 0 auto;
+    padding: 0.72rem 1.2rem;
+    font-size: 0.78rem;
   }
 
   .drive-item {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem 1rem;
-    border-bottom: 1.5px solid var(--ink);
+    gap: 0.9rem;
+    padding: 0.95rem 1rem;
+    border-bottom: 1px solid var(--line);
     cursor: pointer;
     transition: background 0.15s;
-    font-size: 0.9rem;
+    font-size: 0.92rem;
   }
 
   .drive-item:last-child { border-bottom: none; }
-  .drive-item:hover { background: var(--warm-gray); }
+  .drive-item:hover { background: rgba(15, 108, 104, 0.05); }
 
   .drive-item.selected {
-    background: var(--butter);
+    background: linear-gradient(135deg, rgba(255, 180, 60, 0.28), rgba(255, 122, 48, 0.16));
   }
 
   .drive-icon {
-    font-size: 1.1rem;
+    width: 2.5rem;
+    height: 2.5rem;
+    display: grid;
+    place-items: center;
+    border-radius: 14px;
+    background: rgba(15, 108, 104, 0.08);
+    font-size: 1.05rem;
     flex-shrink: 0;
   }
 
-  .drive-label { font-weight: 500; }
+  .drive-label { font-weight: 600; }
   .drive-sub {
-    font-size: 0.75rem;
+    font-size: 0.76rem;
     color: var(--muted);
     font-family: 'Space Mono', monospace;
+    margin-top: 0.15rem;
   }
 
   .no-drives {
@@ -369,108 +542,121 @@
     font-size: 0.875rem;
   }
 
-  /* Progress */
   .progress-wrap {
-    margin-bottom: 1.5rem;
+    margin-bottom: 1rem;
   }
 
   .progress-label {
     display: flex;
     justify-content: space-between;
     font-family: 'Space Mono', monospace;
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     color: var(--muted);
-    margin-bottom: 0.4rem;
+    margin-bottom: 0.45rem;
   }
 
   .progress-bar-outer {
-    height: 10px;
-    background: var(--warm-gray);
-    border: 1.5px solid var(--ink);
-    border-radius: 2px;
+    height: 14px;
+    background: rgba(15, 108, 104, 0.08);
+    border: 1px solid var(--line);
+    border-radius: 999px;
     overflow: hidden;
   }
 
   .progress-bar-inner {
     height: 100%;
-    background: var(--butter);
+    background: linear-gradient(90deg, var(--canopy), var(--wing-coral));
     width: 0%;
     transition: width 0.3s ease;
-    border-right: 1.5px solid var(--ink);
   }
 
-  /* Status message */
   .status-msg {
-    font-size: 0.85rem;
+    font-size: 0.86rem;
     color: var(--muted);
     margin-bottom: 1rem;
     min-height: 1.2em;
+    line-height: 1.55;
     font-family: 'Space Mono', monospace;
   }
 
   .status-msg.ok { color: var(--success); }
   .status-msg.err { color: var(--error); }
 
-  /* Buttons */
   .btn {
     width: 100%;
-    padding: 0.75rem 1.5rem;
-    background: var(--ink);
-    color: var(--butter);
-    border: 2px solid var(--ink);
-    border-radius: 2px;
+    padding: 0.86rem 1.4rem;
+    background: linear-gradient(135deg, var(--wing-sun), var(--wing-coral));
+    color: #102428;
+    border: none;
+    border-radius: 18px;
     font-family: 'Space Mono', monospace;
     font-size: 0.85rem;
     font-weight: 700;
     letter-spacing: 0.04em;
     text-transform: uppercase;
     cursor: pointer;
-    transition: transform 0.1s, box-shadow 0.1s;
-    box-shadow: 3px 3px 0 var(--butter-dark);
+    transition: transform 0.12s, box-shadow 0.12s, filter 0.12s;
+    box-shadow: 0 16px 30px rgba(215, 91, 29, 0.2);
   }
 
   .btn:hover {
-    transform: translate(-1px, -1px);
-    box-shadow: 4px 4px 0 var(--butter-dark);
+    transform: translateY(-1px);
+    filter: saturate(1.03);
+    box-shadow: 0 18px 32px rgba(215, 91, 29, 0.24);
   }
 
   .btn:active {
-    transform: translate(2px, 2px);
-    box-shadow: 1px 1px 0 var(--butter-dark);
+    transform: translateY(1px);
+    box-shadow: 0 10px 18px rgba(215, 91, 29, 0.18);
   }
 
   .btn:disabled {
-    opacity: 0.4;
+    opacity: 0.45;
     cursor: not-allowed;
     transform: none;
-    box-shadow: 3px 3px 0 var(--warm-gray);
+    filter: none;
+    box-shadow: none;
   }
 
   .btn.secondary {
-    background: white;
+    background: rgba(255, 255, 255, 0.95);
     color: var(--ink);
-    box-shadow: 3px 3px 0 var(--ink);
-    margin-top: 0.75rem;
+    box-shadow: inset 0 0 0 1px var(--line), var(--shadow-sm);
+    margin-top: 0;
   }
 
   .btn.secondary:hover {
-    background: var(--warm-gray);
-    box-shadow: 4px 4px 0 var(--ink);
+    background: white;
+    box-shadow: inset 0 0 0 1px rgba(25, 52, 58, 0.2), var(--shadow-sm);
   }
 
-  /* Success state */
+  .flash-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.8rem;
+    margin-top: 1rem;
+  }
+
+  .flash-actions .btn {
+    flex: 1 1 240px;
+  }
+
+  .flash-actions .btn.secondary {
+    flex: 0 1 180px;
+  }
+
   .success-icon {
-    width: 56px;
-    height: 56px;
-    background: var(--butter);
-    border: 2px solid var(--ink);
-    border-radius: 50%;
+    width: 72px;
+    height: 72px;
+    background: linear-gradient(135deg, var(--canopy), var(--wing-coral));
+    color: white;
+    border-radius: 22px;
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 1.5rem;
     margin: 0 auto 1.5rem;
-    box-shadow: 4px 4px 0 var(--ink);
+    box-shadow: 0 20px 34px rgba(15, 108, 104, 0.18);
     animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
   }
 
@@ -481,52 +667,137 @@
 
   .success-title {
     font-family: 'Space Mono', monospace;
-    font-size: 1.1rem;
+    font-size: 1.12rem;
     font-weight: 700;
     text-align: center;
     margin-bottom: 0.5rem;
   }
 
   .success-sub {
-    font-size: 0.875rem;
+    font-size: 0.92rem;
     color: var(--muted);
     text-align: center;
     margin-bottom: 2rem;
     line-height: 1.6;
   }
 
-  /* Footer */
   .footer {
-    margin-top: 1.75rem;
-    font-size: 0.75rem;
+    padding: 0 2rem 1.8rem;
+    font-size: 0.78rem;
     color: var(--muted);
     text-align: center;
     font-family: 'Space Mono', monospace;
   }
 
-  /* Pill badge */
   .badge {
     display: inline-block;
-    background: var(--butter);
-    border: 1.5px solid var(--ink);
-    border-radius: 2px;
+    background: rgba(255, 180, 60, 0.16);
+    border: 1px solid rgba(255, 122, 48, 0.18);
+    border-radius: 999px;
     font-family: 'Space Mono', monospace;
     font-size: 0.65rem;
     font-weight: 700;
     letter-spacing: 0.05em;
-    padding: 2px 6px;
+    padding: 3px 8px;
     text-transform: uppercase;
     vertical-align: middle;
     margin-left: 4px;
+  }
+
+  @media (max-width: 980px) {
+    .hero-band {
+      grid-template-columns: 1fr;
+      padding: 1.5rem 1.5rem 1.2rem;
+    }
+
+    .steps {
+      padding: 1.1rem 1.5rem 0;
+    }
+
+    .panel {
+      padding: 1.5rem;
+    }
+
+    .flash-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .summary-row {
+      flex-direction: column;
+    }
+
+    .summary-pills {
+      justify-content: flex-start;
+    }
+
+    .flash-actions .btn.secondary {
+      flex: 1 1 180px;
+    }
+
+    .footer {
+      padding: 0 1.5rem 1.5rem;
+    }
+  }
+
+  @media (max-width: 580px) {
+    body {
+      padding: 1rem 0.75rem 2rem;
+    }
+
+    .card {
+      border-radius: 26px;
+    }
+
+    .hero-band,
+    .panel,
+    .footer {
+      padding-left: 1.2rem;
+      padding-right: 1.2rem;
+    }
+
+    .steps {
+      grid-template-columns: 1fr;
+      padding-left: 1.2rem;
+      padding-right: 1.2rem;
+    }
+
+    .logo-mark {
+      width: 100%;
+    }
+
+    .input,
+    select,
+    .btn {
+      font-size: 16px;
+    }
+
+    .inline-actions {
+      flex-direction: column;
+    }
+
+    .btn.tertiary {
+      width: 100%;
+    }
   }
 </style>
 </head>
 <body>
 
 <div class="card">
-  <div class="logo-row">
-    <div class="logo-icon">🧈</div>
-    <div class="logo-text">Butter<span>Fi</span></div>
+  <div class="hero-band">
+    <div class="logo-row">
+      <div class="logo-mark">
+        <img class="logo-image" src="./logo.png" alt="ButterFi butterfly logo">
+      </div>
+      <div class="brand-copy">
+        <p class="eyebrow">Butterfly provisioning flow</p>
+        <p class="hero-copy">Stage a ButterFi device, flash the release UF2, then finish the Sidewalk and runtime serial handoff after reboot. The provisioning logic stays the same; the flow is just easier to read.</p>
+      </div>
+    </div>
+    <aside class="hero-note">
+      <span class="hero-note-label">Flight path</span>
+      <p>Load firmware and optional credentials, wake the UF2 bootloader, write the release image, then reconnect once over Web Serial so the new device can store its classroom settings.</p>
+    </aside>
   </div>
 
   <div class="steps">
@@ -537,8 +808,8 @@
 
   <!-- PANEL 1: Configuration -->
   <div class="panel active" id="panel-config">
-    <h1>Configure your ButterFi device</h1>
-    <p class="subtitle">For one device, upload a prebuilt UF2 and a Sidewalk credential package. If you are preparing several devices, you can load a batch package instead.</p>
+    <h1>Configure a ButterFi device</h1>
+    <p class="subtitle">For a single board, load a release UF2 and an optional Sidewalk credential package. For a full classroom set, use a batch package so each device can move through the same flashing flow without losing its per-device identity.</p>
 
     <div class="field">
       <label>Batch Package <span class="badge">Optional</span></label>
@@ -616,66 +887,90 @@
 
   <!-- PANEL 2: Flash -->
   <div class="panel" id="panel-flash">
-    <h1>Flash the dongle</h1>
-    <p class="subtitle">The browser writes audit files first, then copies the release UF2. If a Sidewalk credential package was selected, it is merged into the UF2 before the final write.</p>
+    <h1>Prepare the board for first flight</h1>
+    <p class="subtitle">Wake the XIAO UF2 bootloader, select the removable drive it exposes, and write the release image. After the board restarts, this page finishes the runtime serial handoff so Sidewalk credentials and classroom settings land in the right place.</p>
 
-    <div class="instruction-box">
-      <p><span class="step-num">1</span> Plug your XIAO into USB.</p>
-      <p><span class="step-num">2</span> Double-tap the <kbd>RST</kbd> button quickly — the LED pulses green and a drive appears.</p>
-      <p><span class="step-num">3</span> Select that drive below, then click Flash.</p>
-    </div>
-
-    <div class="drive-list" id="drive-list">
-      <div class="no-drives" id="no-drives-msg">
-        No UF2 drives detected yet.<br>Try double-tapping RST on your device.
-      </div>
-    </div>
-
-    <div id="progress-section" style="display:none">
-      <div class="progress-wrap">
-        <div class="progress-label">
-          <span>Writing staged output</span>
-          <span id="pct-label">0%</span>
+    <div class="flash-layout">
+      <div class="flash-guide">
+        <div class="instruction-box">
+          <div class="instruction-title">Bootloader prep</div>
+          <p><span class="step-num">1</span> Plug your XIAO into USB.</p>
+          <p><span class="step-num">2</span> Double-tap <kbd>RST</kbd> quickly until the board enters UF2 mode and a drive appears.</p>
+          <p><span class="step-num">3</span> Select that drive in the picker, then write the release UF2.</p>
         </div>
-        <div class="progress-bar-outer">
-          <div class="progress-bar-inner" id="progress-bar"></div>
+
+        <div class="instruction-box flash-hint">
+          <div class="instruction-title">Expected handoff</div>
+          <p><span class="step-num">A</span>The bootloader drive appears and the write button unlocks.</p>
+          <p><span class="step-num">B</span>The board may disappear before the browser closes the write stream; this bootloader does that on purpose.</p>
+          <p><span class="step-num">C</span>Once the firmware boots, the runtime serial step appears below to finish the device setup.</p>
         </div>
       </div>
-      <div class="status-msg" id="status-msg">Preparing…</div>
+
+      <div class="flash-surface">
+        <div class="picker-header">
+          <div>
+            <div class="picker-title">UF2 drive picker</div>
+            <div class="picker-copy">Browser security requires a manual drive selection. Choose the XIAO bootloader volume after the board enters UF2 mode.</div>
+          </div>
+          <span class="badge">Manual select</span>
+        </div>
+
+        <div class="drive-list" id="drive-list">
+          <div class="no-drives" id="no-drives-msg">
+            No UF2 drives selected yet.<br>Double-tap RST on the board, then choose the drive below.
+          </div>
+        </div>
+
+        <div id="progress-section" style="display:none">
+          <div class="progress-wrap">
+            <div class="progress-label">
+              <span>Writing staged output</span>
+              <span id="pct-label">0%</span>
+            </div>
+            <div class="progress-bar-outer">
+              <div class="progress-bar-inner" id="progress-bar"></div>
+            </div>
+          </div>
+          <div class="status-msg" id="status-msg">Preparing...</div>
+        </div>
+
+        <div class="batch-card" id="runtime-config-section" style="display:none">
+          <div class="batch-title">Finish runtime serial handoff</div>
+          <div class="field-help" id="runtime-config-help">
+            After the UF2 copy finishes and the board reboots, connect to the ButterFi runtime serial port to save the device config into NVS.
+          </div>
+          <div class="status-msg" id="runtime-config-msg">Waiting for flash to finish...</div>
+          <div class="inline-actions">
+            <button class="btn tertiary" type="button" id="btn-runtime-config" onclick="finishRuntimeProvisioning()" disabled>
+              Connect runtime serial
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <div class="batch-card" id="runtime-config-section" style="display:none">
-      <div class="batch-title">Finish Runtime Setup</div>
-      <div class="field-help" id="runtime-config-help">
-        After the UF2 copy finishes and the board reboots, connect to the ButterFi runtime serial port to save the device config into NVS.
-      </div>
-      <div class="status-msg" id="runtime-config-msg">Waiting for flash to finish…</div>
-      <div class="inline-actions">
-        <button class="btn tertiary" type="button" id="btn-runtime-config" onclick="finishRuntimeProvisioning()" disabled>
-          Connect Runtime Serial
-        </button>
-      </div>
+    <div class="flash-actions">
+      <button class="btn" id="btn-flash" onclick="startFlash()" disabled>
+        Write release UF2
+      </button>
+      <button class="btn secondary" onclick="goToConfig()">Back to config</button>
     </div>
-
-    <button class="btn" id="btn-flash" onclick="startFlash()" disabled>
-      ⚡ Build and Write UF2
-    </button>
-    <button class="btn secondary" onclick="goToConfig()">← Back</button>
   </div>
 
   <!-- PANEL 3: Done -->
   <div class="panel" id="panel-done">
     <div class="success-icon">✓</div>
-    <div class="success-title">Device ready!</div>
+    <div class="success-title">Device ready for the field</div>
     <p class="success-sub" id="done-msg">
-      Your ButterFi dongle has been configured.
+      Your ButterFi device has been configured.
     </p>
     <button class="btn" onclick="reset()">Stage another device</button>
     <button class="btn secondary" onclick="downloadLog()">Download flash log</button>
   </div>
 
   <div class="footer">
-    UF2 bootloader · XIAO nRF52840 · ButterFi provisioning
+    UF2 bootloader · XIAO nRF52840 · ButterFi butterfly bridge provisioning
   </div>
 </div>
 
@@ -693,13 +988,8 @@ let runtimeProvisionRequestCounter = 1;
 const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
 
-const UF2_BLOCK_SIZE = 512;
-const UF2_MAGIC_START0 = 0x0A324655;
-const UF2_MAGIC_START1 = 0x9E5D5157;
-const UF2_MAGIC_END = 0x0AB16F30;
-const UF2_FLAG_FAMILY_ID_PRESENT = 0x00002000;
-const DEFAULT_UF2_PAYLOAD_SIZE = 256;
 const SIDEWALK_MFG_OFFSET = 0xEB000;
+const SIDEWALK_MFG_SIZE = 0x1000;
 const BATCH_PACKAGE_FORMAT = 'butterfi-batch-v1';
 const BATCH_PROGRESS_KEY_PREFIX = 'butterfi-batch-progress:';
 const SIDEWALK_MFG_TLV_VERSION = 8;
@@ -718,12 +1008,20 @@ const USB = {
   version: 0x01,
   frameHostStatusRequest: 0x05,
   frameHostConfigSave: 0x06,
+  frameHostMfgWrite: 0x07,
   frameDeviceStatus: 0x81,
+  frameDeviceUplinkAccepted: 0x82,
   frameDeviceTransferError: 0x85,
   frameDeviceDebugText: 0x87,
   frameDeviceConfigSaved: 0x88,
+  frameDeviceMfgWriteOk: 0x89,
   maxPayload: 512,
 };
+
+// mfg write frames carry a 2-byte offset + 2-byte total length ahead of the
+// chunk data itself (see docs/shared-protocol.md, "Host Mfg Write Payload").
+const MFG_WRITE_HEADER_SIZE = 4;
+const MFG_WRITE_CHUNK_SIZE = USB.maxPayload - MFG_WRITE_HEADER_SIZE;
 
 const runtimeDeviceStateLabels = {
   0: 'Idle',
@@ -750,6 +1048,7 @@ const runtimeErrorCodeLabels = {
   0x05: 'Transfer timed out',
   0x06: 'Protocol mismatch',
   0x07: 'Config save failed',
+  0x08: 'Mfg write failed',
 };
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
@@ -1181,13 +1480,13 @@ function renderManualPicker() {
   list.innerHTML = '';
 
   const msg = document.createElement('div');
-  msg.style.cssText = 'padding:1rem;text-align:center;';
+  msg.className = 'picker-empty';
   msg.innerHTML = `
-    <div style="font-size:0.85rem;color:var(--muted);margin-bottom:0.75rem;line-height:1.6;">
-      After double-tapping RST, click below to<br>select the <strong>XIAO-SENSE</strong> drive that appears.
-    </div>
-    <button class="btn" style="width:auto;padding:0.5rem 1.25rem;font-size:0.75rem;" onclick="pickDrive()">
-      📂 Select UF2 Drive
+    <p>
+      After double-tapping RST, click below to choose the UF2 drive that appears for your XIAO board.
+    </p>
+    <button class="btn btn-picker" type="button" onclick="pickDrive()">
+      Select UF2 drive
     </button>
   `;
   list.appendChild(msg);
@@ -1211,7 +1510,7 @@ async function pickDrive() {
       <span class="drive-icon">💾</span>
       <div>
         <div class="drive-label">${dir.name}</div>
-        <div class="drive-sub">UF2 bootloader drive selected</div>
+        <div class="drive-sub">UF2 bootloader drive selected - ready to write</div>
       </div>
     `;
     list.appendChild(item);
@@ -1233,7 +1532,7 @@ function simulateDriveSelect() {
     <span class="drive-icon">💾</span>
     <div>
       <div class="drive-label">XIAO-SENSE</div>
-      <div class="drive-sub">UF2 bootloader drive · Demo mode</div>
+      <div class="drive-sub">UF2 bootloader drive - demo mode</div>
     </div>
   `;
   list.appendChild(item);
@@ -1312,13 +1611,13 @@ function configToJsonBytes(cfg) {
   return utf8Encoder.encode(JSON.stringify(cfg, null, 2));
 }
 
-function buildProvisioningManifest(cfg, credentialMerged) {
+function buildProvisioningManifest(cfg, credentialPending) {
   return {
     generated_at: new Date().toISOString(),
     firmware_name: cfg.firmware_name,
     sidewalk_credential_name: cfg.sidewalk_credential_name,
-    sidewalk_credential_merged: credentialMerged,
-    sidewalk_credential_address: credentialMerged ? `0x${SIDEWALK_MFG_OFFSET.toString(16)}` : null,
+    sidewalk_credential_pending: credentialPending,
+    sidewalk_credential_address: credentialPending ? `0x${SIDEWALK_MFG_OFFSET.toString(16)}` : null,
     batch: activeBatchPackage
       ? {
           batch_id: activeBatchPackage.batchId,
@@ -1331,10 +1630,10 @@ function buildProvisioningManifest(cfg, credentialMerged) {
     config: cfg,
     notes: [
       'The browser provisioning flow writes the selected UF2 to the XIAO bootloader drive.',
-      credentialMerged
-        ? 'A Sidewalk credential package was merged into the UF2 at the mfg_storage partition.'
+      credentialPending
+        ? 'A Sidewalk credential package is queued to be written to mfg_storage over the runtime USB serial protocol once the board boots the new firmware.'
         : 'No Sidewalk credential package was selected; the device will remain Sidewalk not registered.',
-      'After the UF2 flash, the browser reconnects over the ButterFi runtime serial port and saves school_id, device_name, and content_pkg into NVS.',
+      'After the UF2 flash, the browser reconnects over the ButterFi runtime serial port, writes the pending Sidewalk credential (if any), then saves school_id, device_name, and content_pkg into NVS.',
       activeBatchPackage
         ? 'The operator loaded a batch package and the browser tracked device progress locally.'
         : 'The operator used manual single-device mode.',
@@ -1566,39 +1865,6 @@ function encodeAwsCertificateJsonToSidewalkBinary(text) {
   ]);
 }
 
-function parseUf2(bytes) {
-  if (bytes.length % UF2_BLOCK_SIZE !== 0) {
-    throw new Error('Firmware file is not a valid UF2: unexpected file length');
-  }
-
-  const blocks = [];
-  for (let offset = 0; offset < bytes.length; offset += UF2_BLOCK_SIZE) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset + offset, UF2_BLOCK_SIZE);
-    const magic0 = view.getUint32(0, true);
-    const magic1 = view.getUint32(4, true);
-    const magicEnd = view.getUint32(508, true);
-
-    if (magic0 !== UF2_MAGIC_START0 || magic1 !== UF2_MAGIC_START1 || magicEnd !== UF2_MAGIC_END) {
-      throw new Error('Firmware file is not a valid UF2 block stream');
-    }
-
-    const payloadSize = view.getUint32(16, true);
-    if (payloadSize <= 0 || payloadSize > 476) {
-      throw new Error(`Unsupported UF2 payload size: ${payloadSize}`);
-    }
-
-    blocks.push({
-      flags: view.getUint32(8, true),
-      targetAddr: view.getUint32(12, true),
-      payloadSize,
-      familyId: view.getUint32(28, true),
-      payload: bytes.slice(offset + 32, offset + 32 + payloadSize),
-    });
-  }
-
-  return blocks;
-}
-
 function parseIntelHex(text) {
   const byteMap = new Map();
   let linearBase = 0;
@@ -1658,81 +1924,31 @@ function parseIntelHex(text) {
   return byteMap;
 }
 
-function buildCredentialBlocks(byteMap, payloadSize, flags, familyId) {
-  const grouped = new Map();
-  const addresses = Array.from(byteMap.keys()).sort((left, right) => left - right);
-
-  for (const address of addresses) {
-    const blockAddress = Math.floor(address / payloadSize) * payloadSize;
-    if (!grouped.has(blockAddress)) {
-      const payload = new Uint8Array(payloadSize);
-      payload.fill(0xFF);
-      grouped.set(blockAddress, payload);
-    }
-    grouped.get(blockAddress)[address - blockAddress] = byteMap.get(address);
-  }
-
-  return Array.from(grouped.entries())
-    .sort((left, right) => left[0] - right[0])
-    .map(([targetAddr, payload]) => ({ flags, targetAddr, payloadSize, familyId, payload }));
-}
-
-function encodeUf2(blocks) {
-  const out = new Uint8Array(blocks.length * UF2_BLOCK_SIZE);
-
-  blocks.forEach((block, index) => {
-    const offset = index * UF2_BLOCK_SIZE;
-    const view = new DataView(out.buffer, offset, UF2_BLOCK_SIZE);
-
-    view.setUint32(0, UF2_MAGIC_START0, true);
-    view.setUint32(4, UF2_MAGIC_START1, true);
-    view.setUint32(8, block.flags, true);
-    view.setUint32(12, block.targetAddr, true);
-    view.setUint32(16, block.payloadSize, true);
-    view.setUint32(20, index, true);
-    view.setUint32(24, blocks.length, true);
-    view.setUint32(28, block.familyId, true);
-    out.set(block.payload, offset + 32);
-    view.setUint32(508, UF2_MAGIC_END, true);
-  });
-
-  return out;
-}
-
-async function mergeSidewalkCredentialIntoUf2(baseUf2Bytes, credentialSource) {
-  const blocks = parseUf2(baseUf2Bytes);
-  if (blocks.length === 0) {
-    throw new Error('Firmware file did not contain any UF2 blocks');
-  }
-
-  const firstBlock = blocks[0];
-  const payloadSize = firstBlock.payloadSize || DEFAULT_UF2_PAYLOAD_SIZE;
-  const flags = firstBlock.flags || UF2_FLAG_FAMILY_ID_PRESENT;
-  const familyId = firstBlock.familyId || 0;
-
-  let byteMap;
+// The UF2 bootloader on this hardware only accepts writes to its single
+// known app region and silently ignores blocks targeting any other address
+// (see docs/hardware-validation-checklist.md), so the Sidewalk credential
+// can't be merged into the UF2 and drag-and-dropped like the app image.
+// Instead we resolve it to a flat byte array here and write it over the
+// runtime USB serial protocol after the base UF2 has booted (frame 0x07,
+// see docs/shared-protocol.md).
+async function resolveCredentialFlatBytes(credentialSource) {
   if (credentialSource.format === 'hex' || credentialSource.name.toLowerCase().endsWith('.hex')) {
-    byteMap = parseIntelHex(await readAssetText(credentialSource));
-  } else if (credentialSource.format === 'json' || credentialSource.name.toLowerCase().endsWith('.json')) {
-    const credentialBytes = encodeAwsCertificateJsonToSidewalkBinary(await readAssetText(credentialSource));
-    byteMap = new Map();
-    credentialBytes.forEach((value, index) => {
-      byteMap.set(SIDEWALK_MFG_OFFSET + index, value);
+    const byteMap = parseIntelHex(await readAssetText(credentialSource));
+    const addresses = Array.from(byteMap.keys());
+    const minAddr = Math.min(...addresses);
+    const maxAddr = Math.max(...addresses);
+    const flat = new Uint8Array(maxAddr - minAddr + 1).fill(0xFF);
+    byteMap.forEach((value, address) => {
+      flat[address - minAddr] = value;
     });
-  } else {
-    const bytes = await readAssetBytes(credentialSource);
-    byteMap = new Map();
-    bytes.forEach((value, index) => {
-      byteMap.set(SIDEWALK_MFG_OFFSET + index, value);
-    });
+    return flat;
   }
 
-  const credentialBlocks = buildCredentialBlocks(byteMap, payloadSize, flags, familyId);
-  if (credentialBlocks.length === 0) {
-    throw new Error('Credential package did not produce any UF2 blocks');
+  if (credentialSource.format === 'json' || credentialSource.name.toLowerCase().endsWith('.json')) {
+    return encodeAwsCertificateJsonToSidewalkBinary(await readAssetText(credentialSource));
   }
 
-  return encodeUf2(blocks.concat(credentialBlocks));
+  return readAssetBytes(credentialSource);
 }
 
 async function writeFileToDirectory(dirHandle, fileName, bytes, type) {
@@ -1849,11 +2065,12 @@ function hideRuntimeProvisioningPrompt() {
   setRuntimeConfigStatus('Waiting for flash to finish…', '');
 }
 
-function showRuntimeProvisioningPrompt(cfg, credentialMerged) {
-  pendingRuntimeProvisioning = { cfg, credentialMerged };
+function showRuntimeProvisioningPrompt(cfg, credentialBytes) {
+  pendingRuntimeProvisioning = { cfg, credentialBytes };
   document.getElementById('runtime-config-section').style.display = 'block';
-  document.getElementById('runtime-config-help').textContent =
-    `Flash complete for "${cfg.device_name}". After the board reboots into ButterFi, connect the runtime serial port to save school_id, device_name, and content_pkg into NVS.`;
+  document.getElementById('runtime-config-help').textContent = credentialBytes
+    ? `Flash complete for "${cfg.device_name}". After the board reboots into ButterFi, connect the runtime serial port to write the Sidewalk credential and save school_id, device_name, and content_pkg into NVS.`
+    : `Flash complete for "${cfg.device_name}". After the board reboots into ButterFi, connect the runtime serial port to save school_id, device_name, and content_pkg into NVS.`;
 
   if (!navigator.serial) {
     document.getElementById('btn-runtime-config').disabled = true;
@@ -1883,8 +2100,7 @@ function formatRuntimePortInfo(port) {
   return `USB ${vendor}:${product}`;
 }
 
-async function openRuntimeSerialSession() {
-  const port = await navigator.serial.requestPort();
+async function openRuntimeSerialPort(port) {
   await port.open({ baudRate: 115200, bufferSize: 4096 });
 
   if (typeof port.setSignals === 'function') {
@@ -1901,6 +2117,46 @@ async function openRuntimeSerialSession() {
     writer: port.writable.getWriter(),
     parser: new ButterfiFrameParser(),
   };
+}
+
+// Prompts the picker for a port. Only needed for the first connection in a
+// flow — reconnecting to the same port after a device-triggered reboot
+// (e.g. after a mfg write) should reuse the already-authorized port object
+// via reopenRuntimeSerialSession() instead, since requestPort() always
+// shows the picker again.
+async function openRuntimeSerialSession() {
+  const port = await navigator.serial.requestPort();
+  return openRuntimeSerialPort(port);
+}
+
+// Reopens a port the user already authorized this flow, after the device
+// closed the connection on its own (e.g. rebooting after a mfg write).
+// Retries for a few seconds since the board takes a moment to re-enumerate.
+async function reopenRuntimeSerialSession(previousPort, onProgress, { retries = 50, delayMs = 500 } = {}) {
+  // A full USB disconnect/reconnect (as happens on reboot) can mean the
+  // previously-authorized SerialPort object never becomes openable again on
+  // some platforms. Re-resolve it from the already-granted port list each
+  // attempt instead of blindly retrying .open() on the stale object.
+  const previousInfo = previousPort.getInfo();
+  let lastError;
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const authorizedPorts = await navigator.serial.getPorts();
+      const match = authorizedPorts.find((candidate) => {
+        const info = candidate.getInfo();
+        return info.usbVendorId === previousInfo.usbVendorId && info.usbProductId === previousInfo.usbProductId;
+      }) || previousPort;
+
+      return await openRuntimeSerialPort(match);
+    } catch (error) {
+      lastError = error;
+      onProgress?.(attempt + 1, retries);
+      await sleep(delayMs);
+    }
+  }
+
+  throw new Error(`Could not reconnect to the ButterFi runtime port after reboot: ${lastError?.message || 'unknown error'}`);
 }
 
 async function closeRuntimeSerialSession(session) {
@@ -1996,13 +2252,62 @@ async function waitForRuntimeFrame(session, predicate, timeoutMs) {
   }
 }
 
+// Writes the Sidewalk credential to mfg_storage over the runtime USB
+// protocol (frame 0x07, chunked — see docs/shared-protocol.md). On success
+// the device reboots immediately so Sidewalk re-reads the manufacturing
+// page, which closes the serial session out from under us; the caller is
+// responsible for reconnecting afterward.
+async function writeMfgCredentialOverSerial(session, credentialBytes, onProgress) {
+  if (credentialBytes.length > SIDEWALK_MFG_SIZE) {
+    throw new Error(`Credential is ${credentialBytes.length} bytes, larger than the ${SIDEWALK_MFG_SIZE}-byte mfg_storage partition`);
+  }
+
+  const requestId = nextRuntimeProvisionRequestId();
+  const total = credentialBytes.length;
+
+  for (let offset = 0; offset < total; offset += MFG_WRITE_CHUNK_SIZE) {
+    const chunk = credentialBytes.slice(offset, offset + MFG_WRITE_CHUNK_SIZE);
+    const payload = new Uint8Array(MFG_WRITE_HEADER_SIZE + chunk.length);
+    payload[0] = offset & 0xff;
+    payload[1] = (offset >> 8) & 0xff;
+    payload[2] = total & 0xff;
+    payload[3] = (total >> 8) & 0xff;
+    payload.set(chunk, MFG_WRITE_HEADER_SIZE);
+
+    const isFinalChunk = offset + chunk.length >= total;
+    await writeRuntimeFrame(session, USB.frameHostMfgWrite, requestId, payload);
+    onProgress?.(offset + chunk.length, total);
+
+    const resultFrame = await waitForRuntimeFrame(
+      session,
+      frame => frame.requestId === requestId && (
+        frame.frameType === USB.frameDeviceUplinkAccepted ||
+        frame.frameType === USB.frameDeviceMfgWriteOk ||
+        frame.frameType === USB.frameDeviceTransferError
+      ),
+      10000
+    );
+
+    if (resultFrame.frameType === USB.frameDeviceTransferError) {
+      const errorCode = resultFrame.payload[0] ?? 0;
+      const detail = resultFrame.payload.length > 1 ? utf8Decoder.decode(resultFrame.payload.slice(1)) : '';
+      const label = runtimeErrorCodeLabels[errorCode] || `Error ${errorCode}`;
+      throw new Error(detail ? `${label}: ${detail}` : label);
+    }
+
+    if (isFinalChunk && resultFrame.frameType !== USB.frameDeviceMfgWriteOk) {
+      throw new Error(`Unexpected response finishing mfg write: frame type 0x${resultFrame.frameType.toString(16)}`);
+    }
+  }
+}
+
 async function finishRuntimeProvisioning() {
   if (!pendingRuntimeProvisioning) {
     return;
   }
 
   const button = document.getElementById('btn-runtime-config');
-  const { cfg, credentialMerged } = pendingRuntimeProvisioning;
+  const { cfg, credentialBytes } = pendingRuntimeProvisioning;
   let session = null;
 
   button.disabled = true;
@@ -2016,6 +2321,28 @@ async function finishRuntimeProvisioning() {
     setRuntimeConfigStatus(`Connected to ${portInfo}. Waiting for ButterFi runtime status…`, '');
     await writeRuntimeFrame(session, USB.frameHostStatusRequest, 0);
     await waitForRuntimeFrame(session, frame => frame.frameType === USB.frameDeviceStatus, 8000);
+
+    if (credentialBytes) {
+      setRuntimeConfigStatus(`Writing Sidewalk credential (0 / ${credentialBytes.length} bytes)…`, '');
+      await writeMfgCredentialOverSerial(session, credentialBytes, (sent, total) => {
+        setRuntimeConfigStatus(`Writing Sidewalk credential (${sent} / ${total} bytes)…`, '');
+      });
+      log(`Sidewalk credential written to mfg_storage @ 0x${SIDEWALK_MFG_OFFSET.toString(16)} (${credentialBytes.length} bytes)`);
+
+      setRuntimeConfigStatus('Credential written. Device is rebooting — reconnecting…', '');
+      const port = session.port;
+      await closeRuntimeSerialSession(session);
+      session = null; // avoid a double-close in the outer finally if reopen below fails
+      await sleep(1500);
+      session = await reopenRuntimeSerialSession(port, (attempt, retries) => {
+        setRuntimeConfigStatus(`Device is rebooting — reconnecting (attempt ${attempt}/${retries})…`, '');
+      });
+      log('Reconnected to runtime serial port after credential-write reboot');
+
+      setRuntimeConfigStatus('Reconnected. Waiting for ButterFi runtime status…', '');
+      await writeRuntimeFrame(session, USB.frameHostStatusRequest, 0);
+      await waitForRuntimeFrame(session, frame => frame.frameType === USB.frameDeviceStatus, 8000);
+    }
 
     const requestId = nextRuntimeProvisionRequestId();
     setRuntimeConfigStatus('Writing runtime config into NVS…', '');
@@ -2045,7 +2372,7 @@ async function finishRuntimeProvisioning() {
 
     lastProvisioningResult = {
       cfg,
-      credentialMerged,
+      credentialWritten: Boolean(credentialBytes),
       runtimeConfigSaved: true,
       batchResult: recordBatchProvisioning(cfg),
     };
@@ -2100,19 +2427,18 @@ async function startFlash() {
 
     setStatus('Preparing release UF2…', '');
     setProgress(10);
-    let uf2Bytes = await readAssetBytes(firmwareSource);
-    let credentialMerged = false;
+    const uf2Bytes = await readAssetBytes(firmwareSource);
+    let credentialBytes = null;
 
     if (credentialSource) {
-      setStatus('Merging Sidewalk credential into UF2…', '');
+      setStatus('Reading Sidewalk credential…', '');
       setProgress(30);
-      uf2Bytes = await mergeSidewalkCredentialIntoUf2(uf2Bytes, credentialSource);
-      credentialMerged = true;
-      log(`Merged Sidewalk credential into mfg_storage @ 0x${SIDEWALK_MFG_OFFSET.toString(16)}`);
+      credentialBytes = await resolveCredentialFlatBytes(credentialSource);
+      log(`Sidewalk credential resolved (${credentialBytes.length} bytes); will be written to mfg_storage over runtime serial after reboot`);
     }
 
     const manifestBytes = utf8Encoder.encode(
-      JSON.stringify(buildProvisioningManifest(cfg, credentialMerged), null, 2)
+      JSON.stringify(buildProvisioningManifest(cfg, Boolean(credentialBytes)), null, 2)
     );
 
     setStatus('Writing device config…', '');
@@ -2127,15 +2453,26 @@ async function startFlash() {
     setProgress(65);
 
     setStatus('Writing provisioned UF2…', '');
-    await writeFileToDirectory(selectedDir, firmwareSource.name, uf2Bytes, 'application/octet-stream');
-    log(`UF2 written to drive as ${firmwareSource.name}`);
+    try {
+      await writeFileToDirectory(selectedDir, firmwareSource.name, uf2Bytes, 'application/octet-stream');
+      log(`UF2 written to drive as ${firmwareSource.name}`);
+    } catch (error) {
+      // This UF2 bootloader flashes and reboots as soon as it recognizes a
+      // complete valid image - it does not wait for the write stream to
+      // close or the drive to be ejected. That means the drive can vanish
+      // mid-write, which surfaces here as a write error even though the
+      // flash almost always already succeeded. Treat it as expected rather
+      // than fatal; if the board didn't actually flash, the runtime serial
+      // reconnect below will fail clearly instead.
+      log(`UF2 write stream ended (${error.message}) - this is expected on this bootloader: it flashes and reboots as soon as the image is received, before the browser's write finishes.`);
+    }
     setProgress(80);
 
     setStatus('Verifying…', '');
     await sleep(400);
-    setStatus('Flash complete. Finish runtime setup below.', 'ok');
+    setStatus('Flash complete. Finish the runtime serial handoff below.', 'ok');
     log('UF2 write complete; waiting for runtime serial provisioning');
-    showRuntimeProvisioningPrompt(cfg, credentialMerged);
+    showRuntimeProvisioningPrompt(cfg, credentialBytes);
   } catch (error) {
     setStatus('Write failed: ' + error.message, 'err');
     log('ERROR: ' + error.message);
@@ -2146,10 +2483,11 @@ async function startFlash() {
 async function simulateFlash(cfg, firmwareSource, credentialSource) {
   const stages = [
     [15, 'Connecting to bootloader…'],
-    [30, credentialSource ? 'Merging Sidewalk credential…' : 'Preparing release UF2…'],
+    [30, 'Preparing release UF2…'],
     [50, 'Writing config payload…'],
     [65, 'Writing provisioning manifest…'],
     [80, 'Writing provisioned UF2…'],
+    [90, credentialSource ? 'Writing Sidewalk credential over runtime serial…' : 'Writing runtime config to NVS…'],
     [95, 'Writing runtime config to NVS…'],
     [100, 'Complete!'],
   ];
@@ -2163,7 +2501,7 @@ async function simulateFlash(cfg, firmwareSource, credentialSource) {
 
   log(`Firmware: ${firmwareSource?.name || 'demo-firmware.uf2'}`);
   if (credentialSource) {
-    log(`Sidewalk credential merged from ${credentialSource.name} into 0x${SIDEWALK_MFG_OFFSET.toString(16)}`);
+    log(`Sidewalk credential from ${credentialSource.name} written to mfg_storage @ 0x${SIDEWALK_MFG_OFFSET.toString(16)} over runtime serial`);
   } else {
     log('No Sidewalk credential package selected');
   }
@@ -2174,7 +2512,7 @@ async function simulateFlash(cfg, firmwareSource, credentialSource) {
 
   lastProvisioningResult = {
     cfg,
-    credentialMerged: Boolean(credentialSource),
+    credentialWritten: Boolean(credentialSource),
     runtimeConfigSaved: true,
     batchResult: recordBatchProvisioning(cfg),
   };
@@ -2186,14 +2524,14 @@ function goToDone() {
   stopScan();
   const result = lastProvisioningResult || {
     cfg: buildConfig(),
-    credentialMerged: Boolean(getSelectedCredentialSource()),
+    credentialWritten: Boolean(getSelectedCredentialSource()),
     batchResult: null,
   };
 
   let message = `"${result.cfg.device_name}" configured for ${result.cfg.school_id}. Runtime config was saved over USB serial.`;
 
-  message += result.credentialMerged
-    ? ' The Sidewalk credential package was merged into the flashed UF2.'
+  message += result.credentialWritten
+    ? ' The Sidewalk credential was written to mfg_storage over the runtime serial protocol.'
     : ' Base firmware was flashed without a Sidewalk credential package.';
 
   if (result.batchResult?.nextDeviceId) {

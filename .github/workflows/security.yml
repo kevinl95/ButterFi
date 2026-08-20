@@ -1,0 +1,27 @@
+name: Security & correctness
+
+# Static security + correctness checks for the CloudFormation stack and the
+# inline Lambda code. Runs the exact same script as a local run
+# (scripts/security-scan.sh) so CI and local never drift.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  static-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scanners
+        run: pip install -r scripts/security-requirements.txt
+
+      - name: Run static security + correctness checks
+        run: ./scripts/security-scan.sh

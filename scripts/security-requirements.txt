@@ -1,0 +1,5 @@
+# Pinned tools for scripts/security-scan.sh (local + CI).
+# Bump deliberately — newer versions add rules but can change findings.
+cfn-lint==1.55.1
+checkov==3.3.13
+bandit==1.9.4

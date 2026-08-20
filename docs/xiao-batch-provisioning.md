@@ -97,9 +97,15 @@ When a batch package is loaded, the browser:
 2. Prefills `school_id`, `device_name`, and `content_pkg`.
 3. Uses the embedded UF2 when present.
 4. Uses the selected device credential when present.
-5. Merges the credential into the UF2 at `mfg_storage` (`0xEB000`).
-6. Writes `butterfi_config.json`, `butterfi_provisioning_manifest.json`, and the provisioned UF2 to the XIAO bootloader drive.
-7. Reconnects to the ButterFi runtime serial port after reboot and saves `school_id`, `device_name`, and `content_pkg` into NVS.
+5. Writes the base UF2 and the audit JSONs to the XIAO bootloader drive.
+6. Reconnects to the runtime serial port after the UF2 boots and writes the
+   Sidewalk credential into `mfg_storage` over the runtime protocol (frame
+   `0x07`), which reboots the device. **The credential is NOT merged into the
+   UF2 image** — the UF2 bootloader ignores writes to `mfg_storage`, so the
+   old merge-into-UF2 approach does not work on real hardware; see
+   [docs/xiao-integration-notes.md](./xiao-integration-notes.md).
+7. Reconnects again and saves `school_id`, `device_name`, and `content_pkg`
+   into NVS (frame `0x06`).
 8. Marks the batch entry complete in browser local storage keyed by `batch_id`.
 
 ## Current Limitation
@@ -172,12 +178,53 @@ CSV manifests should include these columns:
 - optional `school_id`
 - optional `content_pkg`
 
+## One-Command Bulk Provisioning (recommended for a full classroom)
+
+For a real rollout, the AWS-side work — creating one Sidewalk wireless device
+per student and exporting each credential — is the friction, not the browser.
+[scripts/bulk-provision-aws.py](../scripts/bulk-provision-aws.py) automates the
+whole loop: for each device it runs `create-wireless-device` under the school's
+device profile, exports its credential with `get-wireless-device`, builds the
+`mfg_storage` `.hex` via [build-sidewalk-credential.py](../scripts/build-sidewalk-credential.py),
+and writes the CSV manifest. With `--uf2` it also calls
+[build-batch-package.py](../scripts/build-batch-package.py) to emit the single
+`butterfi-batch-v1` file the operator loads.
+
+It is **dry-run by default** (creating wireless devices is a billable AWS
+mutation) — add `--execute` to actually create them. Re-running with `--execute`
+**resumes**: any device whose credential already exists is skipped, so a partial
+run is safe to re-run. Output lands under the gitignored `provisioning/` tree.
+
+```bash
+# Preview (no changes):
+python3 scripts/bulk-provision-aws.py \
+  --device-profile-id <your-sidewalk-device-profile-id> \
+  --count 30 --name-prefix ROOM-204 \
+  --school-id BOULDER-HS-01 --content-pkg k12-general \
+  --batch-id room-204-spring-2026
+
+# Create + bundle the batch file in one shot:
+python3 scripts/bulk-provision-aws.py \
+  --device-profile-id <your-sidewalk-device-profile-id> \
+  --count 30 --name-prefix ROOM-204 \
+  --school-id BOULDER-HS-01 --content-pkg k12-general \
+  --batch-id room-204-spring-2026 \
+  --uf2 artifacts/butterfi-xiao-sidewalk.uf2 \
+  --execute
+```
+
+Requires the `aws` CLI configured for the school's account (Sidewalk is
+us-east-1) and the Sidewalk provisioner reachable via `SIDEWALK_BASE`. Use
+`--names-file` (one `device_id[,device_name]` per line) instead of `--count`
+when you want explicit ids.
+
 ## Packaging Guidance
 
 The batch package should be produced by a manufacturing, admin, or backend
 workflow, not by school staff. That workflow should:
 
 1. Choose a shared release UF2 for the rollout.
-2. Generate or import one Sidewalk credential package per device.
+2. Generate or import one Sidewalk credential package per device (e.g. with
+   [scripts/bulk-provision-aws.py](../scripts/bulk-provision-aws.py)).
 3. Embed those assets into one batch JSON, either directly in backend code or by calling [scripts/build-batch-package.py](../scripts/build-batch-package.py).
 4. Hand the operator a single downloadable file.

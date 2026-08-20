@@ -13,15 +13,21 @@
 <body>
     <div class="page-shell">
         <header class="hero">
-            <div>
-                <p class="eyebrow">Chrome Web Serial Console</p>
-                <h1>ButterFi device bridge</h1>
+            <div class="hero-brand">
+                <div class="hero-logo-wrap">
+                    <img class="hero-logo" src="./logo.png" alt="ButterFi butterfly logo">
+                </div>
+                <div class="hero-copy-block">
+                    <p class="eyebrow">Butterfly Device Bridge</p>
+                    <h1>Console</h1>
+                </div>
                 <p class="hero-copy">
-                    Connect a ButterFi dongle, send a query over USB serial, and inspect the chunked
-                    response stream coming back from the Sidewalk firmware.
+                    Connect a ButterFi bridge, send a URL or search query over USB serial, and inspect the
+                    chunked response stream coming back from the Sidewalk firmware.
                 </p>
             </div>
             <div class="hero-note">
+                <p class="hero-note-label">Local Bridge</p>
                 <p>Requires Chrome or Edge on a secure context such as localhost.</p>
                 <p id="support-indicator">Checking browser support…</p>
                 <div class="install-row">

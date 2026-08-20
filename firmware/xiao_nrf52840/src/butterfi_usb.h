@@ -13,6 +13,7 @@ enum butterfi_usb_frame_type {
 	BUTTERFI_USB_FRAME_HOST_PING = 0x04,
 	BUTTERFI_USB_FRAME_HOST_STATUS_REQUEST = 0x05,
 	BUTTERFI_USB_FRAME_HOST_CONFIG_SAVE = 0x06,
+	BUTTERFI_USB_FRAME_HOST_MFG_WRITE = 0x07,
 	BUTTERFI_USB_FRAME_DEVICE_STATUS = 0x81,
 	BUTTERFI_USB_FRAME_DEVICE_UPLINK_ACCEPTED = 0x82,
 	BUTTERFI_USB_FRAME_DEVICE_RESPONSE_CHUNK = 0x83,
@@ -21,6 +22,7 @@ enum butterfi_usb_frame_type {
 	BUTTERFI_USB_FRAME_DEVICE_PONG = 0x86,
 	BUTTERFI_USB_FRAME_DEVICE_DEBUG_TEXT = 0x87,
 	BUTTERFI_USB_FRAME_DEVICE_CONFIG_SAVED = 0x88,
+	BUTTERFI_USB_FRAME_DEVICE_MFG_WRITE_OK = 0x89,
 };
 
 enum butterfi_usb_device_state {
@@ -48,6 +50,7 @@ enum butterfi_usb_error_code {
 	BUTTERFI_USB_ERROR_TRANSFER_TIMED_OUT = 0x05,
 	BUTTERFI_USB_ERROR_PROTOCOL_MISMATCH = 0x06,
 	BUTTERFI_USB_ERROR_CONFIG_SAVE_FAILED = 0x07,
+	BUTTERFI_USB_ERROR_MFG_WRITE_FAILED = 0x08,
 };
 
 typedef void (*butterfi_usb_host_frame_handler_t)(uint8_t frame_type,
@@ -84,5 +87,6 @@ int  butterfi_usb_send_pong(uint8_t request_id,
 							uint16_t payload_len);
 int  butterfi_usb_send_debug_text(const char *message);
 int  butterfi_usb_send_config_saved(uint8_t request_id, const char *message);
+int  butterfi_usb_send_mfg_write_ok(uint8_t request_id, const char *message);
 
 #endif /* BUTTERFI_USB_H */

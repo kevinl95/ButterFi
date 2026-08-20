@@ -1,0 +1,39 @@
+# Checkov config for ButterFi's CloudFormation (template.yaml).
+# Used by scripts/security-scan.sh and the security GitHub Action.
+#
+# The skip list encodes checks we have reviewed and consciously accept for a
+# small, per-school, student text-web bridge — so the gate stays meaningful:
+# any NEW misconfiguration outside this list fails the build.
+
+framework:
+  - cloudformation
+
+compact: true
+quiet: true   # show only failed checks + the summary
+
+skip-check:
+  # Not applicable — the scraper/uplink Lambdas MUST reach the public internet
+  # to fetch pages; a VPC would only add NAT cost with no security gain here.
+  - CKV_AWS_117  # Lambda inside a VPC
+  # Small per-school deployment (~30 devices); on-demand concurrency is fine.
+  - CKV_AWS_115  # Lambda reserved concurrency limit
+  # The async scrape path already has a dedicated SQS DLQ (ScrapeDeadLetterQueue);
+  # a Lambda-level onFailure DLQ would be redundant for these functions.
+  - CKV_AWS_116  # Lambda function DLQ
+  # ChunkTable is an ephemeral cache (per-request rows with a TTL). AWS-managed
+  # encryption at rest is sufficient; a customer KMS CMK and point-in-time backup
+  # add cost/ops for data that is regenerated on demand.
+  - CKV_AWS_119  # DynamoDB customer-managed KMS CMK
+  - CKV_AWS_28   # DynamoDB point-in-time recovery
+  # Lambda env vars here are non-secret (DynamoDB table name, chunk sizes,
+  # destination name) — no CMK needed for encryption.
+  - CKV_AWS_173  # Lambda env var KMS encryption
+  # CloudWatch logs are encrypted at rest with AWS-managed keys by default; a
+  # customer CMK is overkill for non-sensitive scrape/telemetry logs.
+  - CKV_AWS_158  # CloudWatch Log Group KMS CMK
+  # SQS holds transient scrape jobs (device id + query) only; SSE is optional
+  # hardening tracked separately, not a gate.
+  - CKV_AWS_27   # SQS server-side encryption
+  # IAM actions are scoped to the specific services these roles need
+  # (iotwireless / dynamodb / sqs); reviewed and accepted.
+  - CKV_AWS_111  # IAM write access without constraints

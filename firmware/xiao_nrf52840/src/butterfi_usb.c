@@ -43,6 +43,12 @@ static uint8_t rx_ring_buffer[BUTTERFI_USB_RX_RING_SIZE];
 static struct ring_buf rx_ring;
 static uint8_t tx_ring_buffer[BUTTERFI_USB_TX_RING_SIZE];
 static struct ring_buf tx_ring;
+/* Zephyr ring_buf is single-producer/single-consumer, but frames are queued
+ * from multiple threads (the main/sid_process thread emits status + debug
+ * telemetry via the Sidewalk callbacks, the USB thread emits periodic status
+ * and boot info). Serialize every producer so frames can't interleave — this
+ * is the channel the whole diagnostic picture is read from. */
+static K_MUTEX_DEFINE(tx_mutex);
 static struct butterfi_usb_diag_counters usb_diag = {
     .last_tx_result = 0,
     .last_frame_type = 0,
@@ -113,13 +119,20 @@ static void cdc_interrupt_handler(const struct device *dev, void *user_data)
         }
 
         if (uart_irq_tx_ready(dev)) {
-            uint8_t buffer[64];
-            uint32_t queued_len;
+            uint8_t *claim;
+            uint32_t claimed;
             int send_len;
 
-            queued_len = ring_buf_get(&tx_ring, buffer, sizeof(buffer));
-            if (queued_len == 0U) {
+            /* Consume via claim/finish so we only remove the bytes the FIFO
+             * actually accepted, leaving the rest in place and in order. The
+             * old head-read + tail-requeue on a short fifo_fill reordered the
+             * byte stream (a frame's tail landing behind later frames), which
+             * corrupted telemetry — and made the ISR a second, unsynchronized
+             * tx_ring producer. This makes the ISR a pure consumer. */
+            claimed = ring_buf_get_claim(&tx_ring, &claim, 64);
+            if (claimed == 0U) {
                 uart_irq_tx_disable(dev);
+                (void)ring_buf_get_finish(&tx_ring, 0);
                 continue;
             }
 
@@ -128,22 +141,8 @@ static void cdc_interrupt_handler(const struct device *dev, void *user_data)
                 rx_throttled = false;
             }
 
-            send_len = uart_fifo_fill(dev, buffer, queued_len);
-            if (send_len < 0) {
-                LOG_WRN("Failed to write UART FIFO: %d", send_len);
-                continue;
-            }
-
-            if ((uint32_t)send_len < queued_len) {
-                uint32_t restored_len = ring_buf_put(&tx_ring,
-                                                     &buffer[send_len],
-                                                     queued_len - (uint32_t)send_len);
-
-                if (restored_len < queued_len - (uint32_t)send_len) {
-                    LOG_WRN("Dropped %u USB TX bytes",
-                            queued_len - (uint32_t)send_len - restored_len);
-                }
-            }
+            send_len = uart_fifo_fill(dev, claim, claimed);
+            (void)ring_buf_get_finish(&tx_ring, send_len > 0 ? send_len : 0);
         }
     }
 }
@@ -160,14 +159,20 @@ static int write_bytes(const uint8_t *data, size_t len)
         return -EAGAIN;
     }
 
-    queued_len = ring_buf_put(&tx_ring, data, len);
-    if (queued_len < len) {
+    /* Serialize concurrent producers so a whole frame is queued atomically
+     * (the ring is SPSC; the ISR is the single consumer). Drop the entire
+     * frame if it will not fit rather than leaking a truncated one — a dropped
+     * frame is recoverable, a half-frame desyncs the host parser. */
+    k_mutex_lock(&tx_mutex, K_FOREVER);
+    if (ring_buf_space_get(&tx_ring) < len) {
+        k_mutex_unlock(&tx_mutex);
         return -ENOSPC;
     }
-
+    queued_len = ring_buf_put(&tx_ring, data, len);
     uart_irq_tx_enable(cdc_dev);
+    k_mutex_unlock(&tx_mutex);
 
-    return 0;
+    return (queued_len == len) ? 0 : -ENOSPC;
 }
 
 static int send_frame(uint8_t frame_type,
@@ -311,6 +316,21 @@ int butterfi_usb_send_config_saved(uint8_t request_id, const char *message)
     }
 
     return send_frame(BUTTERFI_USB_FRAME_DEVICE_CONFIG_SAVED,
+                      request_id,
+                      (const uint8_t *)message,
+                      (uint16_t)message_len,
+                      0);
+}
+
+int butterfi_usb_send_mfg_write_ok(uint8_t request_id, const char *message)
+{
+    size_t message_len = 0;
+
+    if (message != NULL) {
+        message_len = strnlen(message, BUTTERFI_USB_MAX_PAYLOAD);
+    }
+
+    return send_frame(BUTTERFI_USB_FRAME_DEVICE_MFG_WRITE_OK,
                       request_id,
                       (const uint8_t *)message,
                       (uint16_t)message_len,

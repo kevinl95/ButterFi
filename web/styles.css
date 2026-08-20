@@ -1,18 +1,20 @@
 :root {
-    --page-bg: #f4efe6;
-    --panel-bg: rgba(255, 250, 242, 0.88);
-    --panel-stroke: rgba(70, 51, 35, 0.12);
-    --panel-shadow: 0 24px 60px rgba(94, 65, 34, 0.15);
-    --ink-strong: #2e241b;
-    --ink-muted: #6a5a4a;
-    --accent: #126a52;
-    --accent-strong: #0b4b3b;
-    --accent-soft: #d9efe4;
-    --warning: #a75d1d;
-    --danger: #8d2c2c;
-    --hero-gradient: radial-gradient(circle at top left, rgba(18, 106, 82, 0.22), transparent 38%),
-        radial-gradient(circle at top right, rgba(195, 126, 45, 0.18), transparent 30%),
-        linear-gradient(180deg, #fbf7f0 0%, #efe5d8 100%);
+    --page-bg: #f8fdff;
+    --panel-bg: rgba(255, 255, 255, 0.8);
+    --panel-stroke: rgba(24, 64, 74, 0.12);
+    --panel-shadow: 0 26px 70px rgba(31, 86, 98, 0.14);
+    --ink-strong: #17363d;
+    --ink-muted: #627b84;
+    --accent: #0f6c68;
+    --accent-strong: #0b4a48;
+    --accent-soft: rgba(15, 108, 104, 0.12);
+    --sun: #ffb84a;
+    --sun-strong: #ff8238;
+    --warning: #9d5e1d;
+    --danger: #973434;
+    --hero-gradient: radial-gradient(circle at top left, rgba(255, 184, 74, 0.24), transparent 32%),
+        radial-gradient(circle at top right, rgba(15, 108, 104, 0.18), transparent 28%),
+        linear-gradient(180deg, #f9fdff 0%, #ebf7ff 48%, #f5fbf8 100%);
     --radius-lg: 28px;
     --radius-md: 18px;
     --radius-sm: 999px;
@@ -30,6 +32,21 @@ body {
     font-family: var(--font-sans);
     color: var(--ink-strong);
     background: var(--hero-gradient);
+    position: relative;
+}
+
+body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(circle at 16% 18%, rgba(255, 130, 56, 0.18), transparent 0 92px),
+        radial-gradient(circle at 82% 12%, rgba(15, 108, 104, 0.12), transparent 0 118px),
+        radial-gradient(circle, rgba(23, 54, 61, 0.08) 1px, transparent 1px);
+    background-size: auto, auto, 28px 28px;
+    opacity: 0.65;
+    pointer-events: none;
+    z-index: 0;
 }
 
 button,
@@ -41,14 +58,46 @@ textarea {
     width: min(1180px, calc(100vw - 32px));
     margin: 0 auto;
     padding: 32px 0 48px;
+    position: relative;
+    z-index: 1;
 }
 
 .hero {
     display: grid;
-    grid-template-columns: 1.5fr 0.9fr;
-    gap: 24px;
-    align-items: end;
+    grid-template-columns: 1.3fr 0.88fr;
+    gap: 22px;
+    align-items: stretch;
     margin-bottom: 28px;
+}
+
+.hero > * {
+    min-width: 0;
+}
+
+.hero-brand {
+    display: grid;
+    gap: 18px;
+}
+
+.hero-logo-wrap {
+    width: fit-content;
+    max-width: 100%;
+    padding: 16px 18px;
+    border: 1px solid rgba(255, 130, 56, 0.14);
+    border-radius: 30px;
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(255, 201, 150, 0.28));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.86);
+}
+
+.hero-logo {
+    display: block;
+    width: min(100%, 440px);
+    max-width: 100%;
+    height: auto;
+}
+
+.hero-copy-block {
+    max-width: 60ch;
 }
 
 .eyebrow {
@@ -62,8 +111,8 @@ textarea {
 
 .hero h1 {
     margin: 0;
-    font-size: clamp(2.3rem, 5vw, 4.5rem);
-    line-height: 0.95;
+    font-size: clamp(2.1rem, 4.8vw, 4.25rem);
+    line-height: 0.96;
     letter-spacing: -0.04em;
 }
 
@@ -76,20 +125,32 @@ textarea {
 .hero-copy {
     max-width: 60ch;
     margin: 14px 0 0;
-    font-size: 1rem;
-    line-height: 1.6;
+    font-size: 1.03rem;
+    line-height: 1.72;
 }
 
 .hero-note {
-    padding: 18px 20px;
-    border: 1px solid rgba(18, 106, 82, 0.14);
+    padding: 20px 22px;
+    border: 1px solid rgba(15, 108, 104, 0.14);
     border-radius: var(--radius-lg);
-    background: rgba(255, 255, 255, 0.55);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(236, 248, 252, 0.82));
     backdrop-filter: blur(10px);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+}
+
+.hero-note-label {
+    display: inline-block;
+    margin: 0 0 12px;
+    color: var(--accent-strong);
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 0.76rem;
+    font-weight: 700;
 }
 
 .hero-note p {
     margin: 0;
+    line-height: 1.7;
 }
 
 .hero-note p + p {
@@ -133,7 +194,7 @@ textarea {
     width: 160px;
     height: 160px;
     border-radius: 50%;
-    background: radial-gradient(circle, rgba(18, 106, 82, 0.12), transparent 68%);
+    background: radial-gradient(circle, rgba(255, 130, 56, 0.16), transparent 68%);
     pointer-events: none;
 }
 
@@ -164,7 +225,7 @@ textarea {
 }
 
 .pill-muted {
-    background: rgba(106, 90, 74, 0.11);
+    background: rgba(98, 123, 132, 0.12);
     color: var(--ink-muted);
 }
 
@@ -174,7 +235,7 @@ textarea {
 }
 
 .pill-warn {
-    background: rgba(167, 93, 29, 0.13);
+    background: rgba(255, 130, 56, 0.14);
     color: var(--warning);
 }
 
@@ -193,7 +254,7 @@ textarea {
     border: 0;
     border-radius: 14px;
     padding: 12px 16px;
-    background: rgba(63, 49, 35, 0.08);
+    background: rgba(23, 54, 61, 0.08);
     color: var(--ink-strong);
     cursor: pointer;
     transition: transform 140ms ease, background-color 140ms ease, opacity 140ms ease;
@@ -201,7 +262,7 @@ textarea {
 
 .button:hover:enabled {
     transform: translateY(-1px);
-    background: rgba(63, 49, 35, 0.14);
+    background: rgba(23, 54, 61, 0.13);
 }
 
 .button:disabled {
@@ -210,12 +271,13 @@ textarea {
 }
 
 .button-primary {
-    background: linear-gradient(135deg, var(--accent), var(--accent-strong));
-    color: #f8fffb;
+    background: linear-gradient(135deg, var(--sun), var(--sun-strong));
+    color: #113238;
+    box-shadow: 0 14px 30px rgba(255, 130, 56, 0.18);
 }
 
 .button-primary:hover:enabled {
-    background: linear-gradient(135deg, #188061, #0d4a3c);
+    background: linear-gradient(135deg, #ffc35e, #ff8f42);
 }
 
 .button-small {
@@ -254,18 +316,18 @@ textarea {
 textarea {
     width: 100%;
     resize: vertical;
-    border: 1px solid rgba(70, 51, 35, 0.16);
+    border: 1px solid rgba(24, 64, 74, 0.15);
     border-radius: 18px;
     padding: 16px;
-    background: rgba(255, 255, 255, 0.72);
+    background: rgba(255, 255, 255, 0.76);
     color: var(--ink-strong);
     min-height: 160px;
-    box-shadow: inset 0 1px 1px rgba(70, 51, 35, 0.04);
+    box-shadow: inset 0 1px 1px rgba(24, 64, 74, 0.04);
 }
 
 textarea:focus {
-    outline: 2px solid rgba(18, 106, 82, 0.18);
-    border-color: rgba(18, 106, 82, 0.35);
+    outline: 2px solid rgba(255, 184, 74, 0.22);
+    border-color: rgba(255, 130, 56, 0.28);
 }
 
 .panel-compose .button-row,
@@ -283,8 +345,8 @@ textarea:focus {
 .response-output,
 .log-output {
     border-radius: 20px;
-    background: rgba(38, 31, 25, 0.94);
-    color: #f2eadf;
+    background: rgba(15, 35, 43, 0.95);
+    color: #ecf9fb;
     font-family: var(--font-mono);
 }
 
@@ -320,17 +382,134 @@ textarea:focus {
 
 .log-time,
 .log-direction {
-    color: #d2c1b1;
+    color: #b7d5dc;
 }
 
 .log-message {
-    color: #fff8f0;
+    color: #f7fffd;
+}
+
+.browse-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.address-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.address-input {
+    flex: 1;
+    border: 1px solid rgba(24, 64, 74, 0.16);
+    border-radius: var(--radius-sm);
+    padding: 12px 18px;
+    background: rgba(255, 255, 255, 0.76);
+    color: var(--ink-strong);
+    box-shadow: inset 0 1px 1px rgba(24, 64, 74, 0.04);
+}
+
+.address-input:focus {
+    outline: 2px solid rgba(255, 184, 74, 0.22);
+    border-color: rgba(255, 130, 56, 0.28);
+}
+
+.address-input:disabled {
+    opacity: 0.6;
+}
+
+.browse-status-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.page-panel {
+    min-height: 420px;
+}
+
+.page-content {
+    max-width: 72ch;
+    margin: 0 auto;
+    line-height: 1.65;
+}
+
+.page-content h1,
+.page-content h2,
+.page-content h3 {
+    line-height: 1.25;
+    margin: 1.1em 0 0.4em;
+}
+
+.page-content h1:first-child,
+.page-content h2:first-child,
+.page-content h3:first-child {
+    margin-top: 0;
+}
+
+.page-content p {
+    margin: 0 0 1em;
+}
+
+.page-content ul,
+.page-content ol {
+    margin: 0 0 1em;
+    padding-left: 1.4em;
+}
+
+.page-content li {
+    margin: 0.2em 0;
+}
+
+.page-content hr {
+    border: none;
+    border-top: 1px solid var(--panel-stroke);
+    margin: 1.4em 0;
+}
+
+.page-content a {
+    color: var(--sun-strong);
+    font-weight: 600;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.page-content a.link-unresolved {
+    color: var(--ink-muted);
+    text-decoration: none;
+    cursor: default;
+}
+
+.page-placeholder {
+    color: var(--ink-muted);
+}
+
+.helper-text a {
+    color: var(--accent-strong);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 3px;
+}
+
+.page-streaming {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    color: var(--ink-muted);
+    font-family: var(--font-mono);
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 @media (max-width: 860px) {
     .hero,
     .layout-grid {
         grid-template-columns: 1fr;
+    }
+
+    .hero-logo {
+        width: min(100%, 360px);
     }
 
     .panel-span-two {
@@ -350,5 +529,76 @@ textarea:focus {
     .page-shell {
         width: min(100vw - 20px, 1180px);
         padding-top: 20px;
+    }
+}
+
+@media (max-width: 620px) {
+    .hero-logo-wrap {
+        padding: 14px 16px;
+        border-radius: 24px;
+    }
+
+    .hero h1 {
+        font-size: clamp(1.8rem, 8vw, 2.7rem);
+    }
+
+    .address-row {
+        flex-wrap: wrap;
+    }
+
+    .address-row .address-input {
+        width: 100%;
+        flex-basis: 100%;
+        order: 2;
+    }
+}
+
+/* Print-only elements are hidden on screen (revealed by the print block). */
+.print-only {
+    display: none;
+}
+
+/* ── Save to PDF ──────────────────────────────────────────────────────────
+   The "Save PDF" button calls window.print(); these rules strip the app chrome
+   so the browser's "Save as PDF" output is just the page text, with the page's
+   address as a header and each resolved link's destination shown inline. */
+@media print {
+    body {
+        background: #fff;
+    }
+    .hero,
+    .address-row,
+    .browse-status-row {
+        display: none !important;
+    }
+    .page-shell,
+    .browse-shell,
+    .page-panel,
+    .panel {
+        width: auto;
+        max-width: none;
+        margin: 0;
+        padding: 0;
+        border: none;
+        box-shadow: none;
+        background: #fff;
+    }
+    .print-only {
+        display: block;
+        margin: 0 0 0.75rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid #ccc;
+        font-size: 0.85rem;
+        color: #555;
+        word-break: break-all;
+    }
+    .page-content {
+        color: #000;
+    }
+    .page-content a[data-ref]::after {
+        content: " [" attr(href) "]";
+        font-size: 0.8em;
+        color: #555;
+        word-break: break-all;
     }
 }
