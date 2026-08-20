@@ -206,6 +206,10 @@ def parse_args() -> argparse.Namespace:
         p.error("provide exactly one of --count or --names-file")
     if args.count is not None and args.count <= 0:
         p.error("--count must be positive")
+    # Fail fast on a bad --uf2 BEFORE creating any devices (a batch-step failure
+    # after creation would otherwise leave orphan wireless devices).
+    if args.uf2 and not Path(args.uf2).is_file():
+        p.error(f"--uf2 not found: {args.uf2}")
     return args
 
 
