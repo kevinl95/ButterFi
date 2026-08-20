@@ -71,6 +71,65 @@ function renderPage(text) {
     elements.pageContent.append(fragment);
 }
 
+// ── Response payload decode ───────────────────────────────────────────────
+// The scraper sends [format][data] chunked as opaque bytes: format 0x00 = plain
+// UTF-8, 0x01 = gzip. Reassemble the chunk bytes, read the format, decode once.
+// A gzip stream can't be decoded partially, so compressed transfers render only
+// when complete; plain transfers still render progressively from the prefix.
+const RESP_FORMAT_PLAIN = 0x00;
+const RESP_FORMAT_GZIP = 0x01;
+const pageDecoder = new TextDecoder();
+
+// Concatenate chunk byte arrays. contiguousOnly stops at the first gap (for
+// progressive plain rendering); otherwise skips gaps (all present at complete).
+function concatChunks(transfer, contiguousOnly) {
+    const parts = [];
+    for (let i = 0; i < transfer.chunks.length; i++) {
+        const c = transfer.chunks[i];
+        if (!c) {
+            if (contiguousOnly) break;
+            continue;
+        }
+        parts.push(c);
+    }
+    let total = 0;
+    for (const p of parts) total += p.length;
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const p of parts) {
+        out.set(p, off);
+        off += p.length;
+    }
+    return out;
+}
+
+async function inflateGzip(bytes) {
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+// Decoded page text, or null when it can't be decoded yet (partial gzip, or
+// chunk 0 not received, or a corrupt/incomplete stream).
+async function decodeTransfer(transfer, { partial }) {
+    const first = transfer.chunks[0];
+    if (!first || first.length < 1) {
+        return null; // need chunk 0 for the format byte
+    }
+    if (first[0] === RESP_FORMAT_GZIP) {
+        if (partial) {
+            return null; // can't inflate a partial gzip stream
+        }
+        try {
+            const body = concatChunks(transfer, false).subarray(1);
+            return pageDecoder.decode(await inflateGzip(body));
+        } catch {
+            return null;
+        }
+    }
+    // Plain UTF-8 — decode the contiguous prefix (progressive) or all of it.
+    return pageDecoder.decode(concatChunks(transfer, partial).subarray(1));
+}
+
 function pushHistory(query, text) {
     nav.history = nav.history.slice(0, nav.index + 1);
     nav.history.push({ query, text });
@@ -246,29 +305,38 @@ device.addEventListener("transfer-start", () => {
     updateButtons();
 });
 
-device.addEventListener("chunk", () => {
+device.addEventListener("chunk", async () => {
     const transfer = device.transfer;
     if (!transfer) {
         return;
     }
     const received = transfer.chunks.filter(Boolean).length;
     elements.browseProgress.textContent = `Loading… ${received} / ${transfer.totalChunks} pieces`;
-    // Render the ButterFi markup incrementally as pieces arrive (headings,
-    // lists, links) rather than showing plain text and snapping to styled at
-    // the end. renderButterfiMarkup handles a partial document: inline >N[label]
-    // links render as unresolved (plain, non-clickable) until the trailing link
-    // table arrives in a later piece, then resolve on the next re-render.
-    renderPage(transfer.chunks.map((chunk) => chunk ?? "").join(""));
+    // Render incrementally as pieces arrive for PLAIN pages (headings, lists,
+    // links fill in; unresolved >N[label] links resolve once the trailing link
+    // table arrives). decodeTransfer returns null for a gzip page (can't inflate
+    // a partial stream), so those keep the progress meter until "complete".
+    const text = await decodeTransfer(transfer, { partial: true });
+    if (text !== null) {
+        renderPage(text);
+    }
 });
 
-device.addEventListener("complete", () => {
+device.addEventListener("complete", async () => {
     stopPull();
     const transfer = device.transfer;
     if (!transfer || !nav.pendingQuery) {
         return;
     }
 
-    const text = transfer.chunks.map((chunk) => chunk ?? "").join("");
+    const text = await decodeTransfer(transfer, { partial: false });
+    if (text === null) {
+        nav.pendingQuery = null;
+        elements.browseProgress.textContent = "";
+        showPlaceholder("Could not decode the page (corrupt or incomplete response).");
+        updateButtons();
+        return;
+    }
     pushHistory(nav.pendingQuery, text);
     nav.pendingQuery = null;
     elements.browseProgress.textContent = "";

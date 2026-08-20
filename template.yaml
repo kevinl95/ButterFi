@@ -567,6 +567,7 @@ Resources:
           import urllib.request
           import re
           import socket
+          import gzip
           import boto3
 
           # -------------------------------------------------------
@@ -980,6 +981,53 @@ Resources:
               return chunks
 
 
+          # Response payload format (byte 0): 0x00 = plain UTF-8, 0x01 = gzip.
+          # The device relays these bytes opaquely; the browser reassembles every
+          # chunk, reads byte 0, and inflates with DecompressionStream when gzip.
+          RESP_FORMAT_PLAIN = 0x00
+          RESP_FORMAT_GZIP = 0x01
+
+
+          def chunk_bytes(data, max_bytes):
+              """Split an opaque byte payload into fixed-size chunks."""
+              if not data:
+                  return [b'']
+              return [data[i:i + max_bytes] for i in range(0, len(data), max_bytes)]
+
+
+          def build_response_payload(text, chunk_size):
+              """Return the [format][data] byte payload to chunk and send.
+
+              Gzip-compresses the ButterFi markup when that is smaller (~3x on
+              real pages), else sends plain UTF-8. Fits within 255 chunks by
+              truncating the SOURCE text and recompressing (a gzip stream can't be
+              sliced); most pages fit without any truncation."""
+              budget = chunk_size * 255 - 1  # -1 for the format byte
+              raw = text.encode('utf-8')
+              comp = gzip.compress(raw, 6)
+              if len(comp) <= budget:
+                  if len(comp) < len(raw):
+                      return bytes([RESP_FORMAT_GZIP]) + comp
+                  if len(raw) <= budget:
+                      return bytes([RESP_FORMAT_PLAIN]) + raw
+              # Too big even compressed: shrink the source until the gzip fits.
+              target = len(raw)
+              for _ in range(8):
+                  if comp:
+                      target = min(target, int(target * budget / len(comp) * 0.95))
+                  cut = raw[:max(0, target)]
+                  while cut and (cut[-1] & 0xC0) == 0x80:  # don't split a UTF-8 char
+                      cut = cut[:-1]
+                  comp = gzip.compress(cut, 6)
+                  if len(comp) <= budget:
+                      return bytes([RESP_FORMAT_GZIP]) + comp
+              # Fallback: plain, hard-truncated to the budget.
+              cut = raw[:budget]
+              while cut and (cut[-1] & 0xC0) == 0x80:
+                  cut = cut[:-1]
+              return bytes([RESP_FORMAT_PLAIN]) + cut
+
+
           def send_downlink(device_id, request_id, chunk_idx, total_chunks, chunk_data):
               """Send a single chunk as a Sidewalk downlink."""
               payload = bytes([0x81, request_id, chunk_idx, total_chunks]) + chunk_data
@@ -1019,16 +1067,16 @@ Resources:
                   # Fetch and extract text
                   text = fetch_and_extract(query)
 
-                  # Truncate to reasonable length (avoid massive pages)
-                  max_text = TEXT_CHUNK_SIZE * 255  # max 255 chunks
-                  if len(text.encode('utf-8')) > max_text:
-                      text = text[:max_text]
-
-                  # Chunk it
-                  chunks = chunk_text(text, TEXT_CHUNK_SIZE)
+                  # Compress (gzip when smaller) behind a 1-byte format header,
+                  # then chunk the opaque bytes. Fits within 255 chunks. The device
+                  # relays the bytes; the browser reads the header and inflates.
+                  # ~3x fewer downlink chunks over Sidewalk for real pages.
+                  payload = build_response_payload(text, TEXT_CHUNK_SIZE)
+                  chunks = chunk_bytes(payload, TEXT_CHUNK_SIZE)
                   total = min(len(chunks), 255)
 
-                  print(f'Generated {total} chunks from {len(text)} chars')
+                  fmt = 'gzip' if payload[:1] == bytes([RESP_FORMAT_GZIP]) else 'plain'
+                  print(f'Generated {total} chunks ({len(payload)}B {fmt}) from {len(text)} chars')
 
                   # A reused request_id (browse.js resets its counter to 1 on
                   # reload) would collide with a previous transfer's chunks in

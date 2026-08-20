@@ -550,10 +550,13 @@ export class ButterfiDevice extends EventTarget {
         const requestId = payload[1];
         const chunkIndex = payload[2];
         const totalChunks = payload[3];
-        const chunkText = textDecoder.decode(payload.slice(4));
+        // Store the raw chunk BYTES (not a per-chunk string). The full payload
+        // is [format][data] and may be gzip, so it must be reassembled as bytes
+        // and decoded/inflated once (see decodeTransfer in browse.js).
+        const chunkBytes = payload.slice(4);
         const transfer = this._ensureTransfer(requestId, totalChunks);
 
-        transfer.chunks[chunkIndex] = chunkText;
+        transfer.chunks[chunkIndex] = chunkBytes;
         this._log("device", `Chunk ${chunkIndex + 1}/${totalChunks} for request ${requestId}`);
         this.dispatchEvent(new CustomEvent("chunk", { detail: { transfer } }));
     }
