@@ -54,6 +54,32 @@ Resources:
           Value: ButterFi
 
   # ---------------------------------------------------------------
+  # Content policy - per-school allowlist / blocklist of domains.
+  # Items: { listType: "ALLOW" | "BLOCK", domain: "<registrable domain>" }.
+  # Empty table = open web (default). Edited with scripts/manage-policy.py.
+  # ---------------------------------------------------------------
+  PolicyTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: listType
+          AttributeType: S
+        - AttributeName: domain
+          AttributeType: S
+      KeySchema:
+        - AttributeName: listType
+          KeyType: HASH
+        - AttributeName: domain
+          KeyType: RANGE
+      # Admin-curated safety config, so keep point-in-time backups.
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      Tags:
+        - Key: Project
+          Value: ButterFi
+
+  # ---------------------------------------------------------------
   # SQS - Decouple scraping from chunk delivery
   # ---------------------------------------------------------------
   ScrapeQueue:
@@ -133,6 +159,10 @@ Resources:
                   - dynamodb:BatchWriteItem
                   - dynamodb:Query
                 Resource: !GetAtt ChunkTable.Arn
+              - Effect: Allow
+                Action:
+                  - dynamodb:Query
+                Resource: !GetAtt PolicyTable.Arn
               - Effect: Allow
                 Action:
                   - iot:Publish
@@ -538,6 +568,7 @@ Resources:
       Environment:
         Variables:
           CHUNK_TABLE: !Ref ChunkTable
+          POLICY_TABLE: !Ref PolicyTable
           MAX_CHUNK_BYTES: !Ref MaxChunkBytes
           CHUNK_TTL_HOURS: !Ref ChunkTTLHours
       Code:
@@ -688,6 +719,7 @@ Resources:
           iot_wireless = boto3.client('iotwireless')
 
           CHUNK_TABLE = os.environ['CHUNK_TABLE']
+          POLICY_TABLE = os.environ.get('POLICY_TABLE', '')
           MAX_CHUNK = int(os.environ['MAX_CHUNK_BYTES'])
           CHUNK_TTL = int(os.environ['CHUNK_TTL_HOURS'])
 
@@ -945,6 +977,78 @@ Resources:
               return parser.get_result()
 
 
+          # ── Content policy (per-school allowlist / blocklist) ──────────────
+          # Domains live in the POLICY_TABLE DynamoDB table, edited with
+          # scripts/manage-policy.py. Decision order for a user-navigable URL:
+          #   1. host on the BLOCK list                -> deny (block always wins)
+          #   2. ALLOW list non-empty and host not on it -> deny (allow-only mode)
+          #   3. otherwise                             -> allow
+          # An empty table = open web (the default). Lists are cached for a short
+          # TTL so we don't hit DynamoDB per fetch; a warm container keeps the
+          # last-known-good list if a refresh fails.
+          _POLICY_TTL_SECONDS = 60
+          _policy_cache = {'ts': 0.0, 'allow': None, 'block': None}
+
+
+          def _query_policy_list(list_type):
+              table = dynamodb.Table(POLICY_TABLE)
+              domains = []
+              kwargs = {
+                  'KeyConditionExpression': 'listType = :t',
+                  'ExpressionAttributeValues': {':t': list_type},
+                  'ProjectionExpression': '#d',
+                  'ExpressionAttributeNames': {'#d': 'domain'},  # 'domain' is reserved
+              }
+              while True:
+                  resp = table.query(**kwargs)
+                  domains.extend(item['domain'] for item in resp.get('Items', []))
+                  if 'LastEvaluatedKey' not in resp:
+                      break
+                  kwargs['ExclusiveStartKey'] = resp['LastEvaluatedKey']
+              return domains
+
+
+          def load_policy():
+              """Return (allow, block) domain lists, cached. Empty when no policy
+              table is set; last-known-good on a refresh failure."""
+              if not POLICY_TABLE:
+                  return [], []
+              now = time.time()
+              if _policy_cache['allow'] is not None and now - _policy_cache['ts'] < _POLICY_TTL_SECONDS:
+                  return _policy_cache['allow'], _policy_cache['block']
+              try:
+                  allow = _query_policy_list('ALLOW')
+                  block = _query_policy_list('BLOCK')
+                  _policy_cache.update(ts=now, allow=allow, block=block)
+              except Exception as exc:
+                  print(f'policy load failed: {exc}')
+                  if _policy_cache['allow'] is None:
+                      return [], []  # cold start + read error -> fail open to today's behavior
+              return _policy_cache['allow'], _policy_cache['block']
+
+
+          def _host_on_list(host, domains):
+              """True if host equals or is a subdomain of any listed domain."""
+              host = (host or '').lower().rstrip('.')
+              for d in domains:
+                  d = (d or '').lower().strip().rstrip('.')
+                  if d and (host == d or host.endswith('.' + d)):
+                      return True
+              return False
+
+
+          def is_url_permitted(url):
+              """Apply the school's allowlist/blocklist to a user-navigable URL.
+              Returns (ok, user_facing_message)."""
+              allow, block = load_policy()
+              host = urllib.parse.urlparse(url).hostname or ''
+              if _host_on_list(host, block):
+                  return False, "This site is blocked by your school's content policy."
+              if allow and not _host_on_list(host, allow):
+                  return False, "This site isn't on your school's list of allowed sites."
+              return True, 'ok'
+
+
           def is_safe_fetch_url(url):
               """SSRF guard: allow only http/https to publicly-routable hosts.
 
@@ -981,12 +1085,17 @@ Resources:
                   allowed, reason = is_safe_fetch_url(newurl)
                   if not allowed:
                       raise urllib.error.URLError(f'blocked redirect: {reason}')
+                  # A redirect must not bounce past the school's content policy.
+                  permitted, _ = is_url_permitted(newurl)
+                  if not permitted:
+                      raise urllib.error.URLError('blocked redirect: content policy')
                   return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
           def fetch_and_extract(query):
               """Fetch URL or search, return ButterFi markup."""
               q = query.strip()
+              is_search = False
               if q.startswith('http://') or q.startswith('https://'):
                   url = unwrap_ddg_redirect(q)  # a DDG /l/ wrapper -> real page
               elif ' ' not in q and BARE_DOMAIN.match(q):
@@ -995,12 +1104,22 @@ Resources:
                   # DuckDuckGo's /html route now falls back to a generic landing
                   # page for this scraper UA; /lite still returns actual results.
                   url = f'https://lite.duckduckgo.com/lite/?q={urllib.request.quote(query)}'
+                  is_search = True
 
               # SSRF guard: validate the scheme + resolved host before fetching,
               # and re-check every redirect (via the opener below).
               allowed, reason = is_safe_fetch_url(url)
               if not allowed:
                   return f'Cannot open that address ({reason}).'
+
+              # School content policy — applies to user-navigable pages. The
+              # internal search request isn't policy-checked (it's the tool's own
+              # search, not a destination); a search result gets checked when the
+              # student clicks it and it comes back as a URL query.
+              if not is_search:
+                  permitted, message = is_url_permitted(url)
+                  if not permitted:
+                      return message
 
               req = urllib.request.Request(url, headers={
                   'User-Agent': 'ButterFi/1.0 (educational-access-bridge)'
@@ -1403,6 +1522,10 @@ Outputs:
   ChunkTableName:
     Description: DynamoDB table for response chunks
     Value: !Ref ChunkTable
+
+  PolicyTableName:
+    Description: DynamoDB table for the content allowlist/blocklist (use with scripts/manage-policy.py)
+    Value: !Ref PolicyTable
 
   UplinkLambdaArn:
     Description: Uplink handler Lambda ARN

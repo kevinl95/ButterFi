@@ -157,6 +157,34 @@ pip install -r scripts/security-requirements.txt   # cfn-lint, checkov, bandit
 | ScraperTimeoutSeconds  | 30                   | Scraper Lambda timeout                       |
 | ChunkTTLHours          | 24                   | Hours before DynamoDB TTL cleans up chunks   |
 
+## Content policy (allowlist / blocklist)
+
+Each school's stack has a `PolicyTable` (DynamoDB) of allowed / blocked domains,
+enforced **server-side in the scraper** (per redirect hop too), so it can't be
+bypassed by a modified client. Rules, in order:
+
+1. a domain on the **block** list is always denied (block wins);
+2. if the **allow** list is non-empty, only domains on it — and their subdomains
+   — are reachable (allow-only mode);
+3. otherwise the site loads.
+
+An **empty policy is the default = open web**; schools opt into restriction by
+adding domains. Matching covers subdomains (`example.com` also covers
+`www.example.com`). Search keeps working in allow-only mode — a search result is
+checked when the student opens it.
+
+Edit it with `scripts/manage-policy.py` (needs `boto3` + AWS creds for the
+school's account; resolves the table from the stack):
+
+```bash
+scripts/manage-policy.py block add ads.example doubleclick.net   # deny-list
+scripts/manage-policy.py allow add wikipedia.org khanacademy.org # allow-only
+scripts/manage-policy.py allow list                              # inspect
+scripts/manage-policy.py block remove ads.example                # undo
+```
+
+Changes take effect within ~60s (the scraper caches the policy).
+
 ## Scaling Notes
 
 - **DynamoDB**: PAY_PER_REQUEST mode scales automatically. No capacity planning needed.
