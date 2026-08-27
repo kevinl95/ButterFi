@@ -153,19 +153,25 @@ static void set_usb_diag_led(uint8_t *slot)
 static struct sid_handle *sid_handle   = NULL;
 
 /* Beacon connection-request re-arm state. Per sid_api.h, the BLE beacon
- * "please connect to me" flag must be set again by the app after EVERY dropped
- * connection — the auto-connect policy only arms it for the initial link. So an
- * idle-dropped FFN link (the gateway drops us after ~30s quiet) never comes
- * back on its own: the device keeps advertising but without the connect flag,
- * so the Echo has no reason to reconnect, and it sits NOT_READY until a power
- * cycle re-runs sid_start. Fix: once we've been READY at least once, re-arm the
- * request on each subsequent drop (and periodically while still down, since a
- * gateway may not honor a single request). Gated on was_ready_once so the
- * initial registration path is left exactly as-is. */
+ * "please connect to me" flag must be set again by the app after a dropped
+ * connection AND if the initial connection attempt fails — the auto-connect
+ * policy makes essentially one attempt. Without a retry the device sits
+ * NOT_READY ("Sidewalk starting") forever whenever the gateway is momentarily
+ * unavailable — an idle drop, or an unlucky boot next to a busy gateway — until
+ * a power cycle re-runs sid_start. That's fatal for a dongle that boots at a
+ * student's home. Fix: while trying to (re)connect, periodically re-issue the
+ * request until a gateway answers.
+ *
+ * was_ready_once no longer gates the re-arm (so a failed initial connect is
+ * retried too); it only picks prompt vs delayed: a post-READY drop re-arms
+ * immediately, while the initial connect waits out the auto-connect policy's own
+ * attempt first (BUTTERFI_INITIAL_CONNECT_GRACE_MS) so we don't fight it. */
 static bool was_ready_once;
 static volatile bool reconnect_request_pending;
-static int64_t next_reconnect_arm_ms;
+#define BUTTERFI_INITIAL_CONNECT_GRACE_MS 30000
 #define BUTTERFI_RECONNECT_REARM_INTERVAL_MS 15000
+/* Uptime is 0 at boot, so this holds the first re-arm until the grace period. */
+static int64_t next_reconnect_arm_ms = BUTTERFI_INITIAL_CONNECT_GRACE_MS;
 
 #define BUTTERFI_SIDEWALK_MSG_QUERY 0x01
 #define BUTTERFI_SIDEWALK_MSG_RESEND 0x02
@@ -900,24 +906,25 @@ static int sidewalk_init(void)
     return 0;
 }
 
-/* Re-arm the BLE beacon connection request when the link is down after having
- * been up. Called from the main loop (never a Sidewalk callback). No-op until
- * the first READY, so the initial registration/auto-connect path is untouched;
- * once connected at least once, this is what pulls the device back from an
- * idle-dropped link without a power cycle. Re-issues on the drop and then every
- * BUTTERFI_RECONNECT_REARM_INTERVAL_MS while still down (a gateway may not
- * honor a single request). */
+/* Re-arm the BLE beacon connection request while the device is trying to
+ * (re)connect — covers a failed INITIAL connect as well as a post-READY idle
+ * drop. Called from the main loop (never a Sidewalk callback). Scoped to
+ * SIDEWALK_STATE_INIT (connecting / NOT_READY), so it never fires during
+ * registration (NOT_REGISTERED), faults (ERROR), or once connected (READY). The
+ * first re-arm is held off until BUTTERFI_INITIAL_CONNECT_GRACE_MS so the
+ * auto-connect policy gets its normal initial attempt uncontested; after that it
+ * re-issues every BUTTERFI_RECONNECT_REARM_INTERVAL_MS until a gateway answers.
+ * A post-READY drop sets reconnect_request_pending for a prompt re-arm. */
 static void maybe_rearm_connection_request(void)
 {
     int64_t now;
     sid_error_t err;
 
-    if (sid_handle == NULL || !was_ready_once) {
+    if (sid_handle == NULL) {
         return;
     }
 
-    /* SIDEWALK_STATE_INIT here means "was ready, now NOT_READY" (the drop) —
-     * not registration issues (NOT_REGISTERED) or faults (ERROR/READY). */
+    /* Only while connecting (INIT) — not registration issues, faults, or READY. */
     if (sidewalk_state != SIDEWALK_STATE_INIT) {
         return;
     }
