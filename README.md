@@ -117,19 +117,42 @@ The browser-side tools live in [web/README.md](web/README.md). There are three e
 
 ## Deploy
 
-For the buyer-owned setup flow, start with
-[docs/self-hosted-owner-setup.md](docs/self-hosted-owner-setup.md). The CLI
-example below deploys the same template directly.
+Deployment is two halves: the **cloud** (one click) and the **devices**
+(per-device Sidewalk provisioning, which no link can do for you).
+
+### 1. Cloud — one click
+
+[![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https%3A%2F%2Fbutterfi-deploy-us-east-1.s3.us-east-1.amazonaws.com%2Fbutterfi.yaml&stackName=butterfi)
+
+Opens CloudFormation **in your own AWS account**, pre-loaded with the template —
+review the parameters, check the IAM acknowledgment, and Create Stack. It stands
+up the whole backend (Sidewalk destination, Lambdas, DynamoDB, IoT rules).
+**Must be us-east-1** (Amazon Sidewalk is us-east-1-only) — the link pins it;
+don't switch regions.
+
+Prefer the CLI? Same template:
 
 ```bash
-# Prerequisites: AWS CLI configured with us-east-1 credentials
-
 aws cloudformation deploy \
   --template-file template.yaml \
-  --stack-name butterfi-dev \
-  --capabilities CAPABILITY_NAMED_IAM \
+  --stack-name butterfi \
+  --capabilities CAPABILITY_IAM \
   --region us-east-1
 ```
+
+### 2. Devices — Sidewalk provisioning
+
+A Launch Stack link can't onboard Sidewalk devices (each needs its own
+manufacturing credential + a device profile the stack doesn't create). After the
+cloud is up:
+
+1. Create a Sidewalk **device profile** in AWS IoT Wireless (us-east-1).
+2. Bulk-create devices + credentials + a flashing batch with
+   [scripts/bulk-provision-aws.py](scripts/bulk-provision-aws.py).
+3. Flash + provision each dongle via [web/provision.html](web/provision.html).
+
+Full walkthrough: [docs/self-hosted-owner-setup.md](docs/self-hosted-owner-setup.md)
+and [docs/xiao-batch-provisioning.md](docs/xiao-batch-provisioning.md).
 
 ## Security checks
 
