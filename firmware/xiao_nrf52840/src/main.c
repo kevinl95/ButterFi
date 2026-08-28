@@ -152,26 +152,30 @@ static void set_usb_diag_led(uint8_t *slot)
 #if BUTTERFI_INCLUDE_SIDEWALK
 static struct sid_handle *sid_handle   = NULL;
 
-/* Beacon connection-request re-arm state. Per sid_api.h, the BLE beacon
- * "please connect to me" flag must be set again by the app after a dropped
- * connection AND if the initial connection attempt fails — the auto-connect
- * policy makes essentially one attempt. Without a retry the device sits
- * NOT_READY ("Sidewalk starting") forever whenever the gateway is momentarily
- * unavailable — an idle drop, or an unlucky boot next to a busy gateway — until
- * a power cycle re-runs sid_start. That's fatal for a dongle that boots at a
- * student's home. Fix: while trying to (re)connect, periodically re-issue the
- * request until a gateway answers.
+/* Reconnect strategy — two distinct cases, because they need different fixes:
  *
- * was_ready_once no longer gates the re-arm (so a failed initial connect is
- * retried too); it only picks prompt vs delayed: a post-READY drop re-arms
- * immediately, while the initial connect waits out the auto-connect policy's own
- * attempt first (BUTTERFI_INITIAL_CONNECT_GRACE_MS) so we don't fight it. */
+ *  1. Idle drop AFTER the device has connected once (was_ready_once). Per
+ *     sid_api.h the BLE beacon "please connect to me" flag must be re-set after
+ *     each dropped connection; the auto-connect policy only arms it once, so an
+ *     idle-dropped FFN link never comes back on its own. We re-arm it on the
+ *     drop and every BUTTERFI_RECONNECT_REARM_INTERVAL_MS while down. This works
+ *     ONLY post-connect: sid_ble_bcn_connection_request returns
+ *     SID_ERROR_INVALID_STATE before the device has time-synced.
+ *
+ *  2. The device NEVER completes its first connect (booted with no gateway in
+ *     range). The beacon request can't help (INVALID_STATE) and the auto-connect
+ *     policy doesn't retry, so it hangs on "Sidewalk starting" forever until a
+ *     power cycle — fatal for a dongle that boots at a student's home. The only
+ *     thing that recovers it is a fresh sid_start, so a watchdog reboots after
+ *     BUTTERFI_INITIAL_CONNECT_REBOOT_MS (see maybe_reboot_if_initial_connect_stuck);
+ *     it reconnects the instant a gateway becomes reachable. */
 static bool was_ready_once;
 static volatile bool reconnect_request_pending;
-#define BUTTERFI_INITIAL_CONNECT_GRACE_MS 30000
+static int64_t next_reconnect_arm_ms;
 #define BUTTERFI_RECONNECT_REARM_INTERVAL_MS 15000
-/* Uptime is 0 at boot, so this holds the first re-arm until the grace period. */
-static int64_t next_reconnect_arm_ms = BUTTERFI_INITIAL_CONNECT_GRACE_MS;
+/* Give the auto-connect policy a couple of minutes on the initial connect before
+ * the watchdog reboots to retry from a fresh sid_start. */
+#define BUTTERFI_INITIAL_CONNECT_REBOOT_MS 120000
 
 #define BUTTERFI_SIDEWALK_MSG_QUERY 0x01
 #define BUTTERFI_SIDEWALK_MSG_RESEND 0x02
@@ -906,21 +910,21 @@ static int sidewalk_init(void)
     return 0;
 }
 
-/* Re-arm the BLE beacon connection request while the device is trying to
- * (re)connect — covers a failed INITIAL connect as well as a post-READY idle
- * drop. Called from the main loop (never a Sidewalk callback). Scoped to
- * SIDEWALK_STATE_INIT (connecting / NOT_READY), so it never fires during
- * registration (NOT_REGISTERED), faults (ERROR), or once connected (READY). The
- * first re-arm is held off until BUTTERFI_INITIAL_CONNECT_GRACE_MS so the
- * auto-connect policy gets its normal initial attempt uncontested; after that it
- * re-issues every BUTTERFI_RECONNECT_REARM_INTERVAL_MS until a gateway answers.
- * A post-READY drop sets reconnect_request_pending for a prompt re-arm. */
+/* Re-arm the BLE beacon connection request after a post-connect idle drop.
+ * Called from the main loop (never a Sidewalk callback). Gated on
+ * was_ready_once: the request needs a prior time-sync, so before the first
+ * successful connect it returns SID_ERROR_INVALID_STATE and is useless — that
+ * case is handled by the reboot watchdog instead. Scoped to
+ * SIDEWALK_STATE_INIT (connecting / NOT_READY) so it never fires during
+ * registration, faults, or once connected. A post-READY drop sets
+ * reconnect_request_pending for a prompt re-arm; otherwise it re-issues every
+ * BUTTERFI_RECONNECT_REARM_INTERVAL_MS until a gateway answers. */
 static void maybe_rearm_connection_request(void)
 {
     int64_t now;
     sid_error_t err;
 
-    if (sid_handle == NULL) {
+    if (sid_handle == NULL || !was_ready_once) {
         return;
     }
 
@@ -947,6 +951,30 @@ static void maybe_rearm_connection_request(void)
         (void)snprintk(dbg, sizeof(dbg), "reconn req err=%d", err);
         (void)butterfi_usb_send_debug_text(dbg);
     }
+}
+
+/* Watchdog for a device that never completed its FIRST connect. The beacon
+ * re-arm above can't help pre-time-sync, and the auto-connect policy doesn't
+ * retry, so without this the device hangs on "Sidewalk starting" forever after
+ * booting with no gateway in range. A fresh sid_start is the only recovery, so
+ * reboot once we've been stuck-and-never-ready for BUTTERFI_INITIAL_CONNECT_REBOOT_MS.
+ * Only fires before the first successful connect (was_ready_once == false), so a
+ * device that has ever connected is left to the beacon re-arm and never reboots. */
+static void maybe_reboot_if_initial_connect_stuck(void)
+{
+    if (was_ready_once) {
+        return;
+    }
+    if (sidewalk_state != SIDEWALK_STATE_INIT) {
+        return;  /* not connecting (e.g. NOT_REGISTERED / ERROR) — don't loop-reboot */
+    }
+    if (k_uptime_get() < BUTTERFI_INITIAL_CONNECT_REBOOT_MS) {
+        return;
+    }
+    LOG_WRN("Initial Sidewalk connect stuck — rebooting to retry sid_start");
+    (void)butterfi_usb_send_debug_text("initial connect stuck; rebooting");
+    k_msleep(150);  /* let the debug frame drain over USB before reset */
+    sys_reboot(SYS_REBOOT_COLD);
 }
 #endif
 
@@ -1196,6 +1224,7 @@ int main(void)
         }
 
         maybe_rearm_connection_request();
+        maybe_reboot_if_initial_connect_stuck();
     }
 #else
     LOG_WRN("Sidewalk excluded from build");
