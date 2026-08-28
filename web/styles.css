@@ -384,6 +384,22 @@ textarea:focus {
     gap: 12px;
 }
 
+/* Determinate page-load bar (received / total chunks over Sidewalk). */
+.progress-track {
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(24, 54, 61, 0.10);
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: var(--accent);
+    transition: width 220ms ease;
+}
+
 .page-panel {
     min-height: 420px;
 }
