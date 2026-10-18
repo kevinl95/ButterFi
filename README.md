@@ -109,7 +109,15 @@ For the full real-hardware, real-Sidewalk, real-AWS-stack round trip that this r
 
 ## Browser Tools
 
-The browser-side tools live in [web/README.md](web/README.md). There are three entry points:
+The browser-side tools are **hosted on GitHub Pages** (HTTPS, which Web Serial
+requires) — operators and students just open a link in Chrome or Edge, no local
+server:
+
+- **Provision/flash dongles:** https://kevinl95.github.io/ButterFi/provision.html
+- **Student browser:** https://kevinl95.github.io/ButterFi/browse.html
+- **Technical console:** https://kevinl95.github.io/ButterFi/index.html
+
+Source + local-dev instructions in [web/README.md](web/README.md). The three entry points:
 
 - [web/browse.html](web/browse.html): the student-facing text-only browser — address bar, rendered ButterFi markup with clickable links, and back navigation
 - [web/index.html](web/index.html): technical runtime serial console for the binary ButterFi protocol (status, manual resend, session log)
