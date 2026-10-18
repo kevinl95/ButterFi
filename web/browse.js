@@ -10,6 +10,8 @@ const elements = {
     connectionBadge: document.querySelector("#connection-badge"),
     deviceStatePill: document.querySelector("#device-state-pill"),
     browseProgress: document.querySelector("#browse-progress"),
+    browseBar: document.querySelector("#browse-bar"),
+    browseBarFill: document.querySelector("#browse-bar-fill"),
     backButton: document.querySelector("#back-button"),
     addressInput: document.querySelector("#address-input"),
     goButton: document.querySelector("#go-button"),
@@ -63,6 +65,22 @@ function showPlaceholder(message) {
     p.className = "page-placeholder";
     p.textContent = message;
     elements.pageContent.append(p);
+}
+
+// Determinate load bar driven by received/total chunks. Especially useful for
+// compressed pages, which can't render progressively — the bar is the only live
+// feedback during the Sidewalk transfer.
+function setBar(received, total) {
+    const pct = total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0;
+    elements.browseBar.hidden = false;
+    elements.browseBarFill.style.width = `${pct}%`;
+    elements.browseBar.setAttribute("aria-valuenow", String(pct));
+}
+
+function hideBar() {
+    elements.browseBar.hidden = true;
+    elements.browseBarFill.style.width = "0%";
+    elements.browseBar.setAttribute("aria-valuenow", "0");
 }
 
 function renderPage(text) {
@@ -225,6 +243,7 @@ device.addEventListener("connection-change", (event) => {
     } else {
         setPill(elements.connectionBadge, "Disconnected", "muted");
         setPill(elements.deviceStatePill, "Not connected", "muted");
+        hideBar();
         if (nav.history.length === 0) {
             showPlaceholder("Device disconnected. Click “Connect device” to reconnect, then type an address and press Go.");
             elements.addressInput.value = "";
@@ -300,6 +319,7 @@ function startPull() {
 
 device.addEventListener("transfer-start", () => {
     elements.browseProgress.textContent = "Loading…";
+    setBar(0, 0);
     showPlaceholder("Loading…");
     startPull();
     updateButtons();
@@ -312,6 +332,7 @@ device.addEventListener("chunk", async () => {
     }
     const received = transfer.chunks.filter(Boolean).length;
     elements.browseProgress.textContent = `Loading… ${received} / ${transfer.totalChunks} pieces`;
+    setBar(received, transfer.totalChunks);
     // Render incrementally as pieces arrive for PLAIN pages (headings, lists,
     // links fill in; unresolved >N[label] links resolve once the trailing link
     // table arrives). decodeTransfer returns null for a gzip page (can't inflate
@@ -333,6 +354,7 @@ device.addEventListener("complete", async () => {
     if (text === null) {
         nav.pendingQuery = null;
         elements.browseProgress.textContent = "";
+        hideBar();
         showPlaceholder("Could not decode the page (corrupt or incomplete response).");
         updateButtons();
         return;
@@ -340,6 +362,7 @@ device.addEventListener("complete", async () => {
     pushHistory(nav.pendingQuery, text);
     nav.pendingQuery = null;
     elements.browseProgress.textContent = "";
+    hideBar();
     renderPage(text);
     updateButtons();
 });
@@ -349,6 +372,7 @@ device.addEventListener("error", (event) => {
     const { description, detail } = event.detail;
     nav.pendingQuery = null;
     elements.browseProgress.textContent = "";
+    hideBar();
     showPlaceholder(`${description}${detail ? ` — ${detail}` : ""}`);
     updateButtons();
 });

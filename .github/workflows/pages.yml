@@ -1,0 +1,42 @@
+name: Deploy web app to GitHub Pages
+
+# Publishes web/ to GitHub Pages so operators and students just open a URL
+# (Web Serial needs HTTPS, which Pages provides) instead of running a local
+# server. The app is fully relative-path, so it works under the project
+# subpath https://<user>.github.io/<repo>/.
+#
+# One-time: in repo Settings -> Pages, set Source = "GitHub Actions"
+# (configure-pages below will try to enable it automatically).
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'web/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One Pages deploy at a time; don't cancel an in-progress deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+      - id: deployment
+        uses: actions/deploy-pages@v4

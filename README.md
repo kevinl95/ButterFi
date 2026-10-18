@@ -109,7 +109,15 @@ For the full real-hardware, real-Sidewalk, real-AWS-stack round trip that this r
 
 ## Browser Tools
 
-The browser-side tools live in [web/README.md](web/README.md). There are three entry points:
+The browser-side tools are **hosted on GitHub Pages** (HTTPS, which Web Serial
+requires) — operators and students just open a link in Chrome or Edge, no local
+server:
+
+- **Provision/flash dongles:** https://kevinl95.github.io/ButterFi/provision.html
+- **Student browser:** https://kevinl95.github.io/ButterFi/browse.html
+- **Technical console:** https://kevinl95.github.io/ButterFi/index.html
+
+Source + local-dev instructions in [web/README.md](web/README.md). The three entry points:
 
 - [web/browse.html](web/browse.html): the student-facing text-only browser — address bar, rendered ButterFi markup with clickable links, and back navigation
 - [web/index.html](web/index.html): technical runtime serial console for the binary ButterFi protocol (status, manual resend, session log)
@@ -117,19 +125,42 @@ The browser-side tools live in [web/README.md](web/README.md). There are three e
 
 ## Deploy
 
-For the buyer-owned setup flow, start with
-[docs/self-hosted-owner-setup.md](docs/self-hosted-owner-setup.md). The CLI
-example below deploys the same template directly.
+Deployment is two halves: the **cloud** (one click) and the **devices**
+(per-device Sidewalk provisioning, which no link can do for you).
+
+### 1. Cloud — one click
+
+[![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review?templateURL=https%3A%2F%2Fbutterfi-deploy-us-east-1.s3.us-east-1.amazonaws.com%2Fbutterfi.yaml&stackName=butterfi)
+
+Opens CloudFormation **in your own AWS account**, pre-loaded with the template —
+review the parameters, check the IAM acknowledgment, and Create Stack. It stands
+up the whole backend (Sidewalk destination, Lambdas, DynamoDB, IoT rules).
+**Must be us-east-1** (Amazon Sidewalk is us-east-1-only) — the link pins it;
+don't switch regions.
+
+Prefer the CLI? Same template:
 
 ```bash
-# Prerequisites: AWS CLI configured with us-east-1 credentials
-
 aws cloudformation deploy \
   --template-file template.yaml \
-  --stack-name butterfi-dev \
-  --capabilities CAPABILITY_NAMED_IAM \
+  --stack-name butterfi \
+  --capabilities CAPABILITY_IAM \
   --region us-east-1
 ```
+
+### 2. Devices — Sidewalk provisioning
+
+A Launch Stack link can't onboard Sidewalk devices (each needs its own
+manufacturing credential + a device profile the stack doesn't create). After the
+cloud is up:
+
+1. Create a Sidewalk **device profile** in AWS IoT Wireless (us-east-1).
+2. Bulk-create devices + credentials + a flashing batch with
+   [scripts/bulk-provision-aws.py](scripts/bulk-provision-aws.py).
+3. Flash + provision each dongle via [web/provision.html](web/provision.html).
+
+Full walkthrough: [docs/self-hosted-owner-setup.md](docs/self-hosted-owner-setup.md)
+and [docs/xiao-batch-provisioning.md](docs/xiao-batch-provisioning.md).
 
 ## Security checks
 
@@ -156,6 +187,34 @@ pip install -r scripts/security-requirements.txt   # cfn-lint, checkov, bandit
 | MaxChunkBytes          | 240                  | Max bytes per downlink chunk                 |
 | ScraperTimeoutSeconds  | 30                   | Scraper Lambda timeout                       |
 | ChunkTTLHours          | 24                   | Hours before DynamoDB TTL cleans up chunks   |
+
+## Content policy (allowlist / blocklist)
+
+Each school's stack has a `PolicyTable` (DynamoDB) of allowed / blocked domains,
+enforced **server-side in the scraper** (per redirect hop too), so it can't be
+bypassed by a modified client. Rules, in order:
+
+1. a domain on the **block** list is always denied (block wins);
+2. if the **allow** list is non-empty, only domains on it — and their subdomains
+   — are reachable (allow-only mode);
+3. otherwise the site loads.
+
+An **empty policy is the default = open web**; schools opt into restriction by
+adding domains. Matching covers subdomains (`example.com` also covers
+`www.example.com`). Search keeps working in allow-only mode — a search result is
+checked when the student opens it.
+
+Edit it with `scripts/manage-policy.py` (needs `boto3` + AWS creds for the
+school's account; resolves the table from the stack):
+
+```bash
+scripts/manage-policy.py block add ads.example doubleclick.net   # deny-list
+scripts/manage-policy.py allow add wikipedia.org khanacademy.org # allow-only
+scripts/manage-policy.py allow list                              # inspect
+scripts/manage-policy.py block remove ads.example                # undo
+```
+
+Changes take effect within ~60s (the scraper caches the policy).
 
 ## Scaling Notes
 

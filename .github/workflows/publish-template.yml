@@ -1,0 +1,37 @@
+name: Publish CloudFormation template
+
+# Keeps the Launch Stack deploy in sync: on every published release (and on
+# demand) upload template.yaml to the public S3 object the README's "Launch
+# Stack" button points at, so one-click deploys always use the current template.
+#
+# Requires AWS credentials with s3:PutObject on the bucket below, as repo
+# secrets. Static access keys are shown for simplicity; GitHub OIDC (swap in
+# `role-to-assume` + `permissions: id-token: write`) is the more secure option —
+# see aws-actions/configure-aws-credentials.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  TEMPLATE_BUCKET: butterfi-deploy-us-east-1
+  TEMPLATE_KEY: butterfi.yaml
+  AWS_REGION: us-east-1
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload template to the Launch Stack bucket
+        run: |
+          aws s3 cp template.yaml "s3://${TEMPLATE_BUCKET}/${TEMPLATE_KEY}"
+          echo "Published: https://${TEMPLATE_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${TEMPLATE_KEY}"

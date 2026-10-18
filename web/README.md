@@ -12,15 +12,30 @@ USB transport in [protocol.js](./protocol.js):
 Both `browse.html` and `index.html` are packaged as a small installable PWA
 with an offline app shell.
 
-## Serve Locally
+## Hosted (recommended)
 
-Web Serial requires a secure context. The simplest local option is localhost:
+Web Serial needs a secure context (HTTPS), and operators shouldn't have to run a
+server. The tools are published to GitHub Pages on every push to `main` (see
+[.github/workflows/pages.yml](../.github/workflows/pages.yml)) — just open a link
+in Chrome or Edge:
+
+```text
+https://kevinl95.github.io/ButterFi/provision.html   # flash + provision dongles
+https://kevinl95.github.io/ButterFi/browse.html      # student browser
+https://kevinl95.github.io/ButterFi/index.html       # technical console
+```
+
+The pages are generic — a school loads its own batch package in the provisioning
+tool, and a device routes to whichever stack it was provisioned for — so one
+hosted copy serves everyone.
+
+## Serve Locally (development)
+
+Web Serial also treats `localhost` as a secure context:
 
 ```bash
 python3 -m http.server 4173 --directory web
 ```
-
-Then open any of:
 
 ```text
 http://localhost:4173/browse.html
