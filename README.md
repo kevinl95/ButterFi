@@ -7,28 +7,27 @@ own AWS account to serve chunked text responses over Amazon Sidewalk.
 
 ## Architecture
 
-```
-Chromebook ←WebSerial→ ButterFi Dongle ←Sidewalk→ Neighbor's Echo ←Internet→ AWS
+```mermaid
+flowchart LR
+    CB["Chromebook<br/>(browser, Web Serial)"]
+    DG["ButterFi Dongle"]
+    GW["Neighbor's Echo / Ring<br/>(Sidewalk gateway)"]
 
-                        ┌─────────────────────────────────────────┐
-                        │  AWS (us-east-1)                        │
-                        │                                         │
-  Sidewalk Uplink ────→ │  IoT Core Rule → Uplink Lambda          │
-                        │                      │                  │
-                        │                      ▼                  │
-                        │                  SQS Queue              │
-                        │                      │                  │
-                        │                      ▼                  │
-                        │              Scraper Lambda              │
-                        │               │          │              │
-                        │               ▼          ▼              │
-                        │          DynamoDB    Sidewalk Downlink   │
-                        │          (chunks)    (first chunk)       │
-                        │               │                         │
-                        │               ▼                         │
-  Sidewalk Downlink ←── │      Downlink Lambda                    │
-  (on chunk request)    │      (resends from DynamoDB)            │
-                        └─────────────────────────────────────────┘
+    subgraph AWS["AWS (us-east-1)"]
+        direction TB
+        RULE["IoT Core Rule"] --> UP["Uplink Lambda"]
+        UP --> SQS["SQS Queue"]
+        SQS --> SCR["Scraper Lambda"]
+        SCR --> DDB[("DynamoDB<br/>chunks")]
+        SCR -->|first chunk| DL["Sidewalk Downlink"]
+        DDB --> DWN["Downlink Lambda"]
+        DWN -->|resend on chunk request| DL
+    end
+
+    CB <-->|Web Serial| DG
+    DG <-->|Amazon Sidewalk| GW
+    GW -->|uplink| RULE
+    DL -.->|downlink| GW
 ```
 
 ## Current Tracks
