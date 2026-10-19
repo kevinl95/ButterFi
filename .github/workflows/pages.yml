@@ -5,8 +5,8 @@ name: Deploy web app to GitHub Pages
 # server. The app is fully relative-path, so it works under the project
 # subpath https://<user>.github.io/<repo>/.
 #
-# One-time: in repo Settings -> Pages, set Source = "GitHub Actions"
-# (configure-pages below will try to enable it automatically).
+# configure-pages (enablement: true) turns Pages on with the "GitHub Actions"
+# source automatically, so no manual repo setting is needed.
 
 on:
   push:
@@ -35,6 +35,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web
