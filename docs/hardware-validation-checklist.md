@@ -1,6 +1,6 @@
 # Hardware Validation Checklist
 
-The source contracts between firmware, cloud, and browser line up (see
+The firmware, cloud, and browser protocols line up (see
 [docs/xiao-integration-notes.md](./xiao-integration-notes.md)). This
 checklist sequences a real hardware round trip — a physical XIAO board, a
 real Amazon Sidewalk network, and a deployed AWS stack — so a failure is

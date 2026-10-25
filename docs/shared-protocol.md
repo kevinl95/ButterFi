@@ -1,15 +1,15 @@
 # ButterFi Shared Protocol
 
-This document is the implementation contract between the cloud stack, the
-active ButterFi firmware target, and the Chrome Web Serial app.
+This is the wire protocol shared by the cloud stack, the ButterFi firmware, and
+the Chrome Web Serial app — the authoritative reference for all three.
 
-## Milestone One Scope
+## Scope and Limits
 
 - One active request at a time per device
 - Chrome-based browsers only
 - USB CDC ACM transport between browser and device
 - Sidewalk transport between device and cloud
-- Chunked text responses with explicit resend requests
+- Chunked responses (gzip or plain) with explicit resend requests
 
 ## Sidewalk Frames
 
@@ -41,7 +41,7 @@ All device-to-cloud frames use this header:
 - Message type: `0x03`
 - Payload length: exactly 1 byte
 - Payload byte 0: last received chunk index
-- Semantics: informational for milestone one, not a transport guarantee
+- Semantics: informational only, not a transport guarantee
 
 ### Cloud to Device
 
@@ -51,7 +51,13 @@ All device-to-cloud frames use this header:
 | 1 | Request ID | Matches the request |
 | 2 | Chunk index | `0-254` |
 | 3 | Total chunks | `1-255` |
-| 4..N | UTF-8 bytes | Text chunk payload |
+| 4..N | Payload | Opaque response bytes (see note) |
+
+The response bytes from every chunk (`4..N`), concatenated in chunk-index order,
+form one payload that starts with a 1-byte **format flag** — `0x00` = plain
+UTF-8, `0x01` = gzip — followed by the page bytes. The firmware forwards these
+bytes to the browser without interpreting them (USB frame `0x83`); the browser
+reads the flag and inflates gzip with the native `DecompressionStream`.
 
 ## USB Serial Frames
 
@@ -172,7 +178,7 @@ Error code registry:
   `0x83` without rewriting the chunk body.
 - The browser should maintain user-visible progress from `chunk index` and
   `total chunks`, but the firmware remains the authority for resend behavior.
-- Milestone one should reject a second active host query while one request is in
+- The device rejects a second active host query while one request is in
   flight.
 - If the browser disconnects and reconnects, the device should emit a status
   frame immediately after the serial session is re-established.

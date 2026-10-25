@@ -49,47 +49,21 @@ assume a shared ButterFi-operated backend.
 The concrete owner workflow is documented in
 [docs/self-hosted-owner-setup.md](docs/self-hosted-owner-setup.md).
 
-## Protocol Contract
+## Protocol
 
-The authoritative contract between firmware, browser runtime, and cloud is in
-[docs/shared-protocol.md](docs/shared-protocol.md).
+The authoritative wire protocol — the USB framing between browser and dongle,
+the Sidewalk frames between dongle and cloud, the provisioning frames, and the
+status/error registries — lives in one place:
+[docs/shared-protocol.md](docs/shared-protocol.md). In brief:
 
-The current cloud stack still expects:
-
-- Sidewalk uplinks: `0x01=query`, `0x02=resend`, `0x03=ack`
-- Sidewalk downlinks: `0x81=response chunk`
-- USB runtime transport: framed binary packets, not line-oriented JSON
-
-### Uplink (device → cloud)
-
-| Byte | Field         | Values                                     |
-|------|---------------|--------------------------------------------|
-| 0    | Message type  | 0x01=query, 0x02=resend request, 0x03=ack  |
-| 1    | Request ID    | 0-255, rolling counter                     |
-| 2..N | Payload       | Type-specific payload                      |
-
-Message payloads:
-
-- `0x01`: UTF-8 query string
-- `0x02`: 1 byte next needed chunk index
-- `0x03`: 1 byte last received chunk index
-
-### Downlink (cloud → device)
-
-| Byte | Field         | Values                                     |
-|------|---------------|--------------------------------------------|
-| 0    | Message type  | 0x81=response chunk                        |
-| 1    | Request ID    | Matches the uplink request                 |
-| 2    | Chunk index   | 0-based                                    |
-| 3    | Total chunks  | Total number of chunks for this response   |
-| 4..N | Payload       | Opaque response bytes (see format note)    |
-
-The response bytes from all chunks (each chunk's `4..N`), concatenated in order,
-form one payload that begins with a 1-byte **format flag** — `0x00` = plain
-UTF-8, `0x01` = gzip — followed by the page bytes. The dongle relays these bytes
-without interpreting them; the browser reads the flag and inflates gzip with the
-native `DecompressionStream`. Compression typically cuts a real page to roughly a
-third of the chunks it would otherwise need over Sidewalk.
+- **Browser ↔ dongle:** framed binary USB packets (sync bytes, version, type,
+  request id, length, XOR checksum), not line-oriented JSON.
+- **Dongle ↔ cloud (Sidewalk):** uplinks `0x01=query`, `0x02=resend`,
+  `0x03=ack`; downlinks `0x81=response chunk`.
+- **Responses** are chunked; the reassembled payload starts with a 1-byte format
+  flag (`0x00` plain UTF-8, `0x01` gzip) that the dongle relays untouched and the
+  browser inflates — typically about a third of the chunks a page would
+  otherwise need over Sidewalk.
 
 ### Flow
 

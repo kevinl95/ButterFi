@@ -236,6 +236,6 @@ If you have not installed the SDKs yet, use these upstream sources instead of an
 
 ## Related Docs
 
-- The runtime contract shared by firmware, browser, and cloud is in [docs/shared-protocol.md](shared-protocol.md).
+- The runtime protocol shared by firmware, browser, and cloud is in [docs/shared-protocol.md](shared-protocol.md).
 - XIAO-specific integration notes are in [docs/xiao-integration-notes.md](xiao-integration-notes.md).
 - The repo-level overview is in [README.md](../README.md).

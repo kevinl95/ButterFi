@@ -1,7 +1,7 @@
 # XIAO Integration Notes
 
 This note captures the current relationship between the XIAO firmware tree and
-the existing ButterFi cloud/browser contract.
+the existing ButterFi cloud/browser protocol.
 
 ## Cloud Expectations
 
@@ -38,7 +38,7 @@ The XIAO firmware in [firmware/xiao_nrf52840/](../firmware/xiao_nrf52840) curren
 ## Integration Notes
 
 1. USB runtime framing is aligned: both the browser console and the XIAO firmware now use the shared ButterFi binary frame layer.
-2. The milestone-one query/resend/chunk contract is implemented end to end in source: the browser sends framed USB query/resend requests, the firmware emits Sidewalk `0x01`/`0x02` uplinks, and the cloud returns `0x81` chunk payloads that the firmware forwards back to the browser.
+2. The query/resend/chunk protocol is implemented end to end in source: the browser sends framed USB query/resend requests, the firmware emits Sidewalk `0x01`/`0x02` uplinks, and the cloud returns `0x81` chunk payloads that the firmware forwards back to the browser.
 3. Provisioning is three-phase in the browser: the UF2 bootloader step writes the firmware image only, then the tool reconnects over runtime USB serial to write the Sidewalk manufacturing page (frame `0x07`, causes a reboot), reconnects again, and saves the classroom config into NVS (frame `0x06`). The JSON files left on the UF2 volume are audit artifacts, not the authoritative config or credential store. **This was originally a two-phase flow that merged the credential into the UF2 itself — that approach does not work on real hardware; see the hardware validation findings below.**
 4. The legacy `butterfi_content.c`/`butterfi_content.h` scaffolding has been removed. Sidewalk message handling was already implemented directly in `main.c`; those files were dead code (compiled into Sidewalk builds but never called).
 5. Registration path is partially closed: the browser provisioning flow resolves either a raw AWS `certificate.json` or a supplied Sidewalk manufacturing credential hex/bin into flat bytes and writes them to `mfg_storage` over runtime serial after the UF2 boots. The repo still includes `scripts/build-sidewalk-credential.py` as an admin-side wrapper around the official Sidewalk provisioner for CLI-only AWS exports and offline asset generation.

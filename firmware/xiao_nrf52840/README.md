@@ -18,14 +18,14 @@ This firmware currently provides:
 - NVS-backed storage for `school_id`, `device_name`, and `content_pkg`
 - RGB LED state and USB diagnostic indicators
 
-The integration notes for the current firmware, browser, and cloud contract are
+The integration notes for the current firmware, browser, and cloud protocol are
 in [docs/xiao-integration-notes.md](../../docs/xiao-integration-notes.md).
 
-## Runtime Contract
+## Runtime Protocol
 
 The cloud stack and runtime browser console use the ButterFi binary transport
 documented in [docs/shared-protocol.md](../../docs/shared-protocol.md). This
-firmware implements that contract directly in `src/main.c` and
+firmware implements that protocol directly in `src/main.c` and
 `src/butterfi_usb.c`.
 
 ## What this code does
