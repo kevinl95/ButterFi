@@ -215,6 +215,19 @@ scripts/manage-policy.py block remove ads.example                # undo
 
 Changes take effect within ~60s (the scraper caches the policy).
 
+## Privacy
+
+ButterFi is built to collect as little as possible about the students who use
+it, and everything it does collect stays in the school's own AWS account. In
+short: websites never see the student (the scraper fetches on their behalf), the
+Sidewalk payload is encrypted so the relaying gateway can't read it, the browser
+keeps history in memory only (no cookies/trackers; a **New session** button
+clears it on shared devices), search/URL text is never logged or stored, and
+page content in DynamoDB auto-deletes within `ChunkTTLHours` (default 2h). Logs
+keep operational metadata only, for 7 days.
+
+Full data-practices statement for schools and families: [PRIVACY.md](PRIVACY.md).
+
 ## Scaling Notes
 
 - **DynamoDB**: PAY_PER_REQUEST mode scales automatically. No capacity planning needed.
@@ -242,5 +255,6 @@ Changes take effect within ~60s (the scraper caches the policy).
 - [ ] ButterFi-native content format for teacher-created pages
 - [ ] Static site generator for ButterFi-optimized content
 - [ ] Content caching layer (popular queries served from cache, no re-scrape)
-- [ ] Usage analytics dashboard for school administrators
+- [ ] Usage analytics dashboard for school administrators (must aggregate /
+      anonymize — do not surface per-student browse history; see [PRIVACY.md](PRIVACY.md))
 - [ ] OTA firmware update delivery over Sidewalk

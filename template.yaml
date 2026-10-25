@@ -24,8 +24,12 @@ Parameters:
 
   ChunkTTLHours:
     Type: Number
-    Default: 24
-    Description: Hours to keep chunked responses in DynamoDB before TTL expiry
+    Default: 2
+    Description: >-
+      Hours to keep chunked responses in DynamoDB before TTL expiry. Kept short
+      on purpose: chunks only need to outlive the in-progress transfer and its
+      resend window, so a low value minimizes how long browsed page content
+      lives at rest. Raise it only if slow links need a longer resend window.
 
 Resources:
 
@@ -508,7 +512,9 @@ Resources:
                   control_value = body[0]
 
               if msg_type == 0x01:
-                  print(f'device={device_id} type={msg_type:#x} req={request_id} query={query}')
+                  # Privacy: never log the query/URL text. The query is a child's
+                  # browsing activity; log only non-content metadata for debugging.
+                  print(f'device={device_id} type={msg_type:#x} req={request_id} qlen={len(query)}')
               elif msg_type in (0x02, 0x03):
                   print(f'device={device_id} type={msg_type:#x} req={request_id} value={control_value}')
               else:
@@ -1235,7 +1241,8 @@ Resources:
                   request_id = msg['requestId']
                   query = msg['query']
 
-                  print(f'Scraping for device={device_id} req={request_id} query={query}')
+                  # Privacy: log metadata only, never the query/URL text itself.
+                  print(f'Scraping for device={device_id} req={request_id} qlen={len(query)}')
 
                   # Fetch and extract text
                   text = fetch_and_extract(query)
@@ -1273,7 +1280,9 @@ Resources:
                               'data': base64.b64encode(chunk).decode('ascii'),
                               'total': total,
                               'requestId': request_id,
-                              'query': query[:200],
+                              # Privacy: the query is intentionally NOT stored. Chunks are
+                              # keyed by deviceId + requestId#index, so delivery/resend never
+                              # needs the search term labeling the content at rest.
                               'ttl': ttl_epoch
                           })
 
@@ -1455,25 +1464,25 @@ Resources:
   UplinkErrorLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      RetentionInDays: 14
+      RetentionInDays: 7
 
   UplinkLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${UplinkLambda}
-      RetentionInDays: 14
+      RetentionInDays: 7
 
   ScraperLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${ScraperLambda}
-      RetentionInDays: 14
+      RetentionInDays: 7
 
   DownlinkLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /aws/lambda/${DownlinkLambda}
-      RetentionInDays: 14
+      RetentionInDays: 7
 
   # ---------------------------------------------------------------
   # CloudWatch - Alarms for operational visibility

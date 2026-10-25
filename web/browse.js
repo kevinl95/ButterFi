@@ -17,6 +17,7 @@ const elements = {
     goButton: document.querySelector("#go-button"),
     pageContent: document.querySelector("#page-content"),
     pdfButton: document.querySelector("#pdf-button"),
+    newSessionButton: document.querySelector("#new-session-button"),
     printHeader: document.querySelector("#print-header"),
 };
 
@@ -57,6 +58,9 @@ function updateButtons() {
     // Save PDF is available whenever a completed page is on screen (even after
     // disconnect) — it prints what's already rendered, no device needed.
     elements.pdfButton.disabled = loading || nav.index < 0;
+    // New session is available whenever there's something to clear (a page in
+    // history or text in the address bar) and nothing is mid-load.
+    elements.newSessionButton.disabled = loading || (nav.index < 0 && !elements.addressInput.value.trim());
 }
 
 function showPlaceholder(message) {
@@ -152,6 +156,26 @@ function pushHistory(query, text) {
     nav.history = nav.history.slice(0, nav.index + 1);
     nav.history.push({ query, text });
     nav.index = nav.history.length - 1;
+}
+
+// Shared-device privacy: wipe this student's in-memory browsing history and the
+// on-screen page so the next person on a shared Chromebook can't see what they
+// looked at. History is never persisted (no localStorage/cookies), so once this
+// runs — or the tab is reloaded — nothing of the session remains client-side.
+function clearSession() {
+    nav.history = [];
+    nav.index = -1;
+    nav.pendingQuery = null;
+    nav.awaitingReady = false;
+    clearTimeout(nav.readyTimer);
+    elements.addressInput.value = "";
+    elements.browseProgress.textContent = "";
+    elements.printHeader.textContent = "";
+    hideBar();
+    showPlaceholder(device.connected
+        ? "Type a web address or search above and press Go."
+        : "Connect a device, then type a web address or search above and press Go.");
+    updateButtons();
 }
 
 function showHistoryEntry(index) {
@@ -402,6 +426,8 @@ elements.addressInput.addEventListener("keydown", (event) => {
         navigate(elements.addressInput.value);
     }
 });
+
+elements.newSessionButton.addEventListener("click", clearSession);
 
 elements.addressInput.addEventListener("input", updateButtons);
 
