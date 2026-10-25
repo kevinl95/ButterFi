@@ -82,7 +82,14 @@ Message payloads:
 | 1    | Request ID    | Matches the uplink request                 |
 | 2    | Chunk index   | 0-based                                    |
 | 3    | Total chunks  | Total number of chunks for this response   |
-| 4..N | Payload      | UTF-8 text content                         |
+| 4..N | Payload       | Opaque response bytes (see format note)    |
+
+The response bytes from all chunks (each chunk's `4..N`), concatenated in order,
+form one payload that begins with a 1-byte **format flag** — `0x00` = plain
+UTF-8, `0x01` = gzip — followed by the page bytes. The dongle relays these bytes
+without interpreting them; the browser reads the flag and inflates gzip with the
+native `DecompressionStream`. Compression typically cuts a real page to roughly a
+third of the chunks it would otherwise need over Sidewalk.
 
 ### Flow
 
@@ -90,7 +97,7 @@ Message payloads:
 2. PWA sends query over Web Serial to the dongle
 3. Dongle transmits uplink (type=0x01) over Sidewalk
 4. IoT Core routes to Uplink Lambda → SQS → Scraper Lambda
-5. Scraper fetches the page, strips to text, chunks into 236-byte pieces
+5. Scraper fetches the page, strips it to text, compresses it (gzip when smaller) behind a 1-byte format flag, and chunks the bytes into 236-byte pieces
 6. Chunks stored in DynamoDB, first chunk sent as immediate downlink
 7. Device receives chunk 0, forwards it to the browser, and requests more via type=0x02 with the next needed chunk index
 8. Downlink Lambda reads from DynamoDB and sends next batch of chunks
@@ -104,7 +111,7 @@ The checked-in helper script is [scripts/build-xiao.sh](scripts/build-xiao.sh). 
 
 For quick post-flash USB sanity checks, the firmware guide also documents two optional probe scripts in [firmware/xiao_nrf52840/README.md](firmware/xiao_nrf52840/README.md).
 
-For the full real-hardware, real-Sidewalk, real-AWS-stack round trip that this repo has not yet run, follow [docs/hardware-validation-checklist.md](docs/hardware-validation-checklist.md).
+The full real-hardware → real-Sidewalk → real-AWS round trip has been validated end to end: a dongle reached a neighbor's Sidewalk gateway and loaded a live page. The step-by-step checklist is in [docs/hardware-validation-checklist.md](docs/hardware-validation-checklist.md).
 
 ## Browser Tools
 
@@ -118,7 +125,7 @@ server:
 
 Source + local-dev instructions in [web/README.md](web/README.md). The three entry points:
 
-- [web/browse.html](web/browse.html): the student-facing text-only browser — address bar, rendered ButterFi markup with clickable links, and back navigation
+- [web/browse.html](web/browse.html): the student-facing text-only browser — address bar, rendered ButterFi markup with clickable links, back navigation, a load-progress bar, Save PDF, and a New session button that clears history on shared devices
 - [web/index.html](web/index.html): technical runtime serial console for the binary ButterFi protocol (status, manual resend, session log)
 - [web/provision.html](web/provision.html): XIAO provisioning and web-flash prototype, with single-device self-hosted setup, optional batch-package support, and post-flash runtime config save over USB serial
 
@@ -176,7 +183,9 @@ pip install -r scripts/security-requirements.txt   # cfn-lint, checkov, bandit
   documented in [.checkov.yaml](.checkov.yaml))
 - **bandit** — Python SAST on the inline Lambda code (extracted from the
   `Code.ZipFile:` blocks) plus `scripts/` — HIGH severity gates the build;
-  MEDIUM/LOW are advisory (e.g. the scraper's user-URL `urlopen` fetch surface).
+  MEDIUM/LOW are advisory (e.g. the scraper's user-URL `urlopen` fetch surface,
+  which is wrapped by an SSRF allow-guard that blocks private/loopback/metadata
+  targets on every redirect hop).
 
 ## Parameters
 
@@ -185,7 +194,7 @@ pip install -r scripts/security-requirements.txt   # cfn-lint, checkov, bandit
 | SidewalkDestinationName| ButterFiDestination  | IoT Core Sidewalk destination name           |
 | MaxChunkBytes          | 240                  | Max bytes per downlink chunk                 |
 | ScraperTimeoutSeconds  | 30                   | Scraper Lambda timeout                       |
-| ChunkTTLHours          | 24                   | Hours before DynamoDB TTL cleans up chunks   |
+| ChunkTTLHours          | 2                    | Hours before DynamoDB TTL deletes page-content chunks (kept short for privacy) |
 
 ## Content policy (allowlist / blocklist)
 
