@@ -55,11 +55,16 @@ Notes:
 - the deploy still needs `CAPABILITY_NAMED_IAM` acknowledgment in the console
 - GitHub Pages or another HTTPS site can host the helper page, but not the CloudFormation template target for quick-create
 
-CLI deploy is also supported:
+CLI deploy is also supported. The template is over CloudFormation's
+51,200-byte limit for direct uploads, so `deploy` needs an S3 bucket of yours
+(any bucket in us-east-1) to stage it in:
 
 ```bash
+BUCKET="butterfi-cfn-$(aws sts get-caller-identity --query Account --output text)"
+aws s3 mb "s3://$BUCKET" --region us-east-1   # once
 aws cloudformation deploy \
   --template-file template.yaml \
+  --s3-bucket "$BUCKET" \
   --stack-name butterfi \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1

@@ -133,11 +133,16 @@ up the whole backend (Sidewalk destination, Lambdas, DynamoDB, IoT rules).
 **Must be us-east-1** (Amazon Sidewalk is us-east-1-only) — the link pins it;
 don't switch regions.
 
-Prefer the CLI? Same template:
+Prefer the CLI? Same template. It's larger than the 51,200 bytes CloudFormation
+accepts directly, so `deploy` stages it in an S3 bucket of yours first; any
+us-east-1 bucket works, and the first line creates one if you don't have one:
 
 ```bash
+BUCKET="butterfi-cfn-$(aws sts get-caller-identity --query Account --output text)"
+aws s3 mb "s3://$BUCKET" --region us-east-1   # once
 aws cloudformation deploy \
   --template-file template.yaml \
+  --s3-bucket "$BUCKET" \
   --stack-name butterfi \
   --capabilities CAPABILITY_IAM \
   --region us-east-1

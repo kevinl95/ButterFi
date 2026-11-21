@@ -1629,10 +1629,13 @@ Outputs:
     Value: !GetAtt DownlinkLambda.Arn
 
   DeployCommand:
-    Description: Deploy with
+    Description: >-
+      Redeploy from the CLI. The template is over the 51,200-byte direct-upload
+      limit, so it's staged in a us-east-1 S3 bucket you own.
     Value: >
       aws cloudformation deploy
       --template-file template.yaml
+      --s3-bucket <your-us-east-1-bucket>
       --stack-name butterfi
       --capabilities CAPABILITY_NAMED_IAM
-      --region <your-region>
+      --region us-east-1

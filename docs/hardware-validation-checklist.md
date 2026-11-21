@@ -295,8 +295,13 @@ been observed to fail with `AccessDeniedException` in other regions (e.g.
 `us-west-2`) even when general IoT Wireless API calls succeed there:
 
 ```bash
+# The template is over CloudFormation's 51,200-byte direct-upload limit, so
+# stage it in a us-east-1 bucket of yours (created once here).
+BUCKET="butterfi-cfn-$(aws sts get-caller-identity --query Account --output text)"
+aws s3 mb "s3://$BUCKET" --region us-east-1
 aws cloudformation deploy \
   --template-file template.yaml \
+  --s3-bucket "$BUCKET" \
   --stack-name butterfi \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
