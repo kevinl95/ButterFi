@@ -16,6 +16,7 @@ const elements = {
     backButton: document.querySelector("#back-button"),
     addressInput: document.querySelector("#address-input"),
     goButton: document.querySelector("#go-button"),
+    cancelButton: document.querySelector("#cancel-button"),
     pageContent: document.querySelector("#page-content"),
     pdfButton: document.querySelector("#pdf-button"),
     newSessionButton: document.querySelector("#new-session-button"),
@@ -37,6 +38,7 @@ const nav = {
     interrupted: false,
     // Pull-driver counters (see pullTick).
     waitTicks: 0,
+    queryRetries: 0,
     stallTicks: 0,
     resendGap: 1,
     nextResendTick: 1,
@@ -73,6 +75,13 @@ function isLoading() {
     return Boolean(nav.transfer) && !nav.transfer.complete && nav.pendingQuery !== null && deviceOnline();
 }
 
+// Something the student can stop: a page loading or stalled (online or not), or
+// a query held while the dongle reconnects to Sidewalk.
+function canCancel() {
+    return Boolean(nav.awaitingReady)
+        || (nav.pendingQuery !== null && Boolean(nav.transfer) && !nav.transfer.complete);
+}
+
 function updateButtons() {
     const connected = device.connected;
     const reconnecting = device.reconnecting;
@@ -82,6 +91,7 @@ function updateButtons() {
     elements.disconnectButton.disabled = !(connected || reconnecting || device.port);
     elements.addressInput.disabled = !connected || reconnecting;
     elements.goButton.disabled = !connected || reconnecting || loading || !elements.addressInput.value.trim();
+    elements.cancelButton.hidden = !canCancel();
     elements.backButton.disabled = nav.index <= 0 || loading;
     // Save PDF is available whenever a completed page is on screen (even after
     // disconnect) — it prints what's already rendered, no device needed.
@@ -229,13 +239,15 @@ function showHistoryEntry(index) {
     updateButtons();
 }
 
-async function navigate(query) {
+// `retries` > 0 only when the pull driver re-sends a page whose first piece
+// never came (see retryQuery); that replaces the page still "loading".
+async function navigate(query, { retries = 0 } = {}) {
     const trimmed = query.trim();
     if (!trimmed || !device.connected) {
         return;
     }
 
-    if (isLoading()) {
+    if (isLoading() && retries === 0) {
         return;
     }
 
@@ -251,6 +263,7 @@ async function navigate(query) {
     }
 
     nav.pendingQuery = trimmed;
+    nav.queryRetries = retries;
     nav.awaitingReady = false;
     clearTimeout(nav.readyTimer);
     elements.addressInput.value = trimmed;
@@ -262,6 +275,7 @@ async function navigate(query) {
     // the device reaches READY — instead of failing immediately.
     if (device.deviceStatus?.deviceState !== 3) {
         nav.awaitingReady = true;
+        updateButtons();  // shows Cancel
         elements.browseProgress.textContent = "Connecting to Sidewalk…";
         showPlaceholder("Connecting to Sidewalk… (the dongle reconnects after being idle)");
         nav.readyTimer = setTimeout(() => {
@@ -391,9 +405,12 @@ device.addEventListener("status", (event) => {
 // device adopts the request even if it rebooted in between.
 let pullTimer = null;
 let lastReceived = -1;  // -1: first tick after a start or resume — ask right away
-// Ticks are 2.5s. Stop a page whose chunk 0 hasn't come after a minute online
-// (generous: the scraper alone can take most of ScraperTimeoutSeconds).
-const FIRST_CHUNK_TIMEOUT_TICKS = 24;
+// Ticks are 2.5s. If chunk 0 hasn't come after 30 s online (the scraper alone
+// can take most of ScraperTimeoutSeconds), the query or chunk 0 was most likely
+// lost: Sidewalk downlinks are best effort, and an idle link drops and
+// reconnects every ~30 s. Send the query again, at most twice, then stop.
+const FIRST_CHUNK_RETRY_TICKS = 12;
+const MAX_QUERY_RETRIES = 2;
 // While online but no new chunk arrives, re-request with doubling gaps up to
 // once a minute, and stop after 10 minutes. A dead transfer (chunks past
 // ChunkTTLHours, or a link that reads Ready but carries nothing) then doesn't
@@ -432,9 +449,12 @@ function pullTick() {
 
     if (!deviceOnline()) {
         // Wait it out, and re-request on the first tick after Sidewalk is back.
+        // Pause the give-up counters (waitTicks, stallTicks) rather than reset
+        // them: an idle Sidewalk link drops for a couple of seconds every ~30 s,
+        // and resetting on each drop kept a dead page "Resuming…" forever.
         lastReceived = -1;
-        nav.waitTicks = 0;
-        resetStall();
+        nav.resendGap = 1;
+        nav.nextResendTick = nav.stallTicks + 1;
         showInterrupted(transfer);
         return;
     }
@@ -448,7 +468,7 @@ function pullTick() {
         nav.interrupted = false;
         elements.browseProgress.textContent = transfer.totalChunks > 0
             ? `Resuming… ${received} / ${transfer.totalChunks} pieces`
-            : "Resuming…";
+            : "Reconnected — waiting for the page…";
         updateButtons();
     }
 
@@ -456,10 +476,15 @@ function pullTick() {
         // Waiting for chunk 0, which is deliberately never re-requested. Request
         // IDs restart at 1 on every page load, and the scraper clears a request
         // ID's old chunks only after it finishes fetching — so a resend before
-        // the first chunk could return a page from an earlier session.
+        // the first chunk could return a page from an earlier session. Sending
+        // the query again (a new request ID) has no such risk.
         nav.waitTicks += 1;
-        if (nav.waitTicks >= FIRST_CHUNK_TIMEOUT_TICKS) {
-            giveUpPage("Stopped: no response for this page.");
+        if (nav.waitTicks >= FIRST_CHUNK_RETRY_TICKS) {
+            if ((nav.queryRetries ?? 0) < MAX_QUERY_RETRIES) {
+                retryQuery();
+            } else {
+                giveUpPage("Stopped: no response for this page.");
+            }
         }
         return;
     }
@@ -489,11 +514,57 @@ function pullTick() {
     }
 }
 
-// Stop a page that has stopped arriving while the dongle is online. Whatever
-// already rendered stays on screen.
+// After a page is stopped: keep whatever already rendered (only plain pages
+// render partially). Otherwise the screen still says "Loading…", so put the
+// previous page back, or a hint if there isn't one. The address bar keeps the
+// stopped page's address so Go retries it.
+function showAfterStop(transfer, message) {
+    const first = transfer?.chunks[0];
+    const renderedPartial = Boolean(first) && first[0] === RESP_FORMAT_PLAIN;
+    if (renderedPartial) {
+        return;
+    }
+    const entry = nav.history[nav.index];
+    if (entry) {
+        renderPage(entry.text);
+    } else {
+        showPlaceholder(message);
+    }
+}
+
+// Send the page's query again as a fresh request, like pressing Go again.
+// navigate() releases the old request on the dongle; a late chunk for it is
+// ignored (the chunk handler only accepts nav.transfer's pieces).
+function retryQuery() {
+    const query = nav.pendingQuery;
+    const retries = (nav.queryRetries ?? 0) + 1;
+    navigate(query, { retries });
+    elements.browseProgress.textContent =
+        `No answer yet — asking again (try ${retries + 1} of ${MAX_QUERY_RETRIES + 1})…`;
+}
+
+// Stop a page that has stopped arriving while the dongle is online.
 function giveUpPage(message) {
+    const transfer = nav.transfer;
     abandonPage();
     elements.browseProgress.textContent = `${message} Press Go to try again.`;
+    showAfterStop(transfer, `${message} Press Go to try again.`);
+    updateButtons();
+}
+
+// The student pressed Cancel (or Esc): stop the page being loaded, or the query
+// waiting for Sidewalk. abandonPage() also tells the dongle to drop the request,
+// so it goes back to Ready instead of staying Busy.
+function cancelPage() {
+    if (!canCancel()) {
+        return;
+    }
+    const transfer = nav.transfer;
+    nav.awaitingReady = false;
+    clearTimeout(nav.readyTimer);
+    abandonPage();
+    elements.browseProgress.textContent = "Stopped. Press Go to try again.";
+    showAfterStop(transfer, "Stopped. Press Go to try again.");
     updateButtons();
 }
 
@@ -621,6 +692,14 @@ elements.disconnectButton.addEventListener("click", () => {
 
 elements.goButton.addEventListener("click", () => {
     navigate(elements.addressInput.value);
+});
+
+elements.cancelButton.addEventListener("click", cancelPage);
+
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && canCancel()) {
+        cancelPage();
+    }
 });
 
 elements.pdfButton.addEventListener("click", () => {

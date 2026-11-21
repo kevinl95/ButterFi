@@ -483,7 +483,8 @@ Resources:
           TABLE = os.environ['CHUNK_TABLE']
 
           def handler(event, context):
-              print(json.dumps(event))
+              # Never log the raw event: PayloadData carries the student's
+              # query (URL or search terms). Only metadata is logged below.
 
               # IoT Core Sidewalk uplinks arrive with PayloadData (base64)
               payload_b64 = event.get('PayloadData', '')
