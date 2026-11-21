@@ -1,6 +1,6 @@
 # XIAO Batch Provisioning
 
-This document defines the browser-side batch provisioning workflow for the Seeed XIAO nRF52840 ButterFi path.
+This document defines the browser-side batch provisioning workflow for the Seeed XIAO nRF52840 Plus ButterFi path.
 
 This is an optional advanced flow for multi-device rollout. The primary
 self-hosted owner setup path is documented in

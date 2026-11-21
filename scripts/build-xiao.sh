@@ -123,6 +123,13 @@ configure_build() {
         cmake_args+=("-DEXTRA_CONF_FILE=$extra_conf_path")
     fi
 
+    # The log build also needs a devicetree change (a second USB CDC carrying
+    # the console + LOG). Devicetree can't see Kconfig, so add its overlay here,
+    # keyed off the same conf fragment.
+    if [[ "$extra_conf_path" == *prj.sidewalk-log.conf* ]]; then
+        cmake_args+=("-DEXTRA_DTC_OVERLAY_FILE=$APP_DIR/log-cdc.overlay")
+    fi
+
     if [[ -n "$USB_CONTROL_DEBUG" ]]; then
         cmake_args+=("-DBUTTERFI_USB_CONTROL_DEBUG:BOOL=$USB_CONTROL_DEBUG")
     fi

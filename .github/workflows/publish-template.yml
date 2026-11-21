@@ -4,6 +4,12 @@ name: Publish CloudFormation template
 # demand) upload template.yaml to the public S3 object the README's "Launch
 # Stack" button points at, so one-click deploys always use the current template.
 #
+# The template's Scraper also uses a Lambda layer (Brotli for Python) that
+# CloudFormation copies from this same public bucket during the deploy, so the
+# layer zip is published FIRST, at the versioned key the template names
+# (BrotliLayerKey's default). That key is never overwritten: stacks deployed
+# from older templates keep pointing at the zip they were written for.
+#
 # Requires AWS credentials with s3:PutObject on the bucket below, as repo
 # secrets. Static access keys are shown for simplicity; GitHub OIDC (swap in
 # `role-to-assume` + `permissions: id-token: write`) is the more secure option —
@@ -30,6 +36,30 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build and upload the Brotli layer (before the template)
+        run: |
+          set -euo pipefail
+          # Key and version come from the template, so the two can't drift:
+          #   BrotliLayerKey default = layers/brotli-<version>-py312-x86_64.zip
+          KEY=$(awk '/^  BrotliLayerKey:/{f=1} f && /Default:/{print $2; exit}' template.yaml)
+          VERSION=$(sed -nE 's#^layers/brotli-([0-9.]+)-py312-x86_64\.zip$#\1#p' <<<"$KEY")
+          if [ -z "$VERSION" ]; then
+            echo "BrotliLayerKey default '$KEY' isn't layers/brotli-<version>-py312-x86_64.zip" >&2
+            exit 1
+          fi
+          if aws s3api head-object --bucket "$TEMPLATE_BUCKET" --key "$KEY" >/dev/null 2>&1; then
+            echo "Layer already published: s3://${TEMPLATE_BUCKET}/${KEY} (versioned keys are never overwritten)"
+            exit 0
+          fi
+          # Prebuilt manylinux wheel for Lambda's runtime (python3.12, x86_64);
+          # nothing is compiled. A layer's Python code lives under python/.
+          python3 -m pip install --no-deps --no-compile --only-binary=:all: \
+            --platform manylinux2014_x86_64 --implementation cp --python-version 3.12 \
+            --target layer/python "brotli==${VERSION}"
+          (cd layer && zip -qr9 ../brotli-layer.zip python)
+          aws s3 cp brotli-layer.zip "s3://${TEMPLATE_BUCKET}/${KEY}"
+          echo "Published layer: s3://${TEMPLATE_BUCKET}/${KEY}"
 
       - name: Upload template to the Launch Stack bucket
         run: |

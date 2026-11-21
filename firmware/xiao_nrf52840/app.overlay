@@ -5,28 +5,16 @@
  * disabling the console/LOG entirely faults this board at boot, so we keep them
  * enabled but off the USB — see prj.sidewalk.conf for the why.
  *
- * Field-debug build (CONFIG_BUTTERFI_LOG_CDC=y, via prj.sidewalk-log.conf):
- * add a second USB CDC ACM (cdc_acm_uart1) and route the console + LOG backend
- * to it, so Sidewalk/Zephyr logs — including the disconnect reason — come out
- * as a second /dev/ttyACM with no adapter. Overlays are run through the C
- * preprocessor, so the CONFIG_* gate below is honored at build time.
+ * Field-debug build (prj.sidewalk-log.conf): scripts/build-xiao.sh layers
+ * log-cdc.overlay on top of this file, adding a second USB CDC ACM and moving
+ * the console + LOG onto it. That can't be gated here with #if CONFIG_*:
+ * devicetree is preprocessed before Kconfig runs, so CONFIG_* symbols are never
+ * defined in an overlay.
  */
-#if defined(CONFIG_BUTTERFI_LOG_CDC)
-&zephyr_udc0 {
-	cdc_acm_uart1: cdc_acm_uart1 {
-		compatible = "zephyr,cdc-acm-uart";
-	};
-};
-#endif
-
 / {
 	chosen {
-#if defined(CONFIG_BUTTERFI_LOG_CDC)
-		zephyr,console = &cdc_acm_uart1;
-#else
 		/* Student: console + LOG on the hardware UART, off the USB entirely. */
 		zephyr,console = &uart0;
-#endif
 		/* Keep these off the runtime CDC regardless of build variant so
 		 * nothing but the ButterFi binary protocol ever writes to it. */
 		/delete-property/ zephyr,shell-uart;

@@ -1,0 +1,18 @@
+/* Field-debug only — layered on app.overlay by scripts/build-xiao.sh when the build
+ * includes prj.sidewalk-log.conf. Adds a second USB CDC ACM (cdc_acm_uart1) and
+ * routes the Zephyr console + LOG backend to it, so the Sidewalk/Zephyr log
+ * (including disconnect reasons) is readable as a second /dev/ttyACM with no
+ * adapter. Never in student builds: it adds a second port to the Web Serial
+ * picker.
+ */
+&zephyr_udc0 {
+	cdc_acm_uart1: cdc_acm_uart1 {
+		compatible = "zephyr,cdc-acm-uart";
+	};
+};
+
+/ {
+	chosen {
+		zephyr,console = &cdc_acm_uart1;
+	};
+};

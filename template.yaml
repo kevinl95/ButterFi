@@ -31,6 +31,21 @@ Parameters:
       resend window, so a low value minimizes how long browsed page content
       lives at rest. Raise it only if slow links need a longer resend window.
 
+  ArtifactBucket:
+    Type: String
+    Default: butterfi-deploy-us-east-1
+    Description: >-
+      Public us-east-1 S3 bucket holding the Brotli layer zip (the same bucket
+      the Launch Stack template comes from). Leave as-is unless you host your
+      own copy.
+
+  BrotliLayerKey:
+    Type: String
+    Default: layers/brotli-1.2.1-py312-x86_64.zip
+    Description: >-
+      Object key of the Brotli Python layer in ArtifactBucket. Published by
+      .github/workflows/publish-template.yml; versioned and never overwritten.
+
 Resources:
 
   # ---------------------------------------------------------------
@@ -561,6 +576,24 @@ Resources:
       SourceArn: !GetAtt SidewalkUplinkRule.Arn
 
   # ---------------------------------------------------------------
+  # Lambda layer - Brotli encoder for the Scraper
+  # The Python runtime has no brotli module. CloudFormation copies this zip
+  # from the public deploy bucket into the deploying account, so the one-click
+  # Launch Stack flow is unchanged.
+  # ---------------------------------------------------------------
+  BrotliLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      Description: Brotli (Python) for ButterFi response compression
+      CompatibleRuntimes:
+        - python3.12
+      CompatibleArchitectures:
+        - x86_64
+      Content:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref BrotliLayerKey
+
+  # ---------------------------------------------------------------
   # Lambda - Scraper (fetches pages, chunks, sends downlinks)
   # ---------------------------------------------------------------
   ScraperLambda:
@@ -570,7 +603,11 @@ Resources:
       Handler: index.handler
       Role: !GetAtt ScraperLambdaRole.Arn
       Timeout: !Ref ScraperTimeoutSeconds
-      MemorySize: 256
+      # 512 MB buys twice the CPU of 256 MB (Lambda scales CPU with memory),
+      # which brotli-11 on a long page needs to stay well inside the timeout.
+      MemorySize: 512
+      Layers:
+        - !Ref BrotliLayer
       Environment:
         Variables:
           CHUNK_TABLE: !Ref ChunkTable
@@ -598,7 +635,7 @@ Resources:
             byte 1:    request ID
             byte 2:    chunk index (0-based)
             byte 3:    total chunks
-            byte 4..N: UTF-8 text chunk
+            byte 4..N: response payload bytes ([format][data], chunked)
           """
           import json
           import os
@@ -612,6 +649,12 @@ Resources:
           import ipaddress
           import gzip
           import boto3
+          try:
+              # From BrotliLayer (a zip in the public deploy bucket). If the layer
+              # is missing, responses fall back to gzip and still work.
+              import brotli
+          except ImportError:
+              brotli = None
 
           # -------------------------------------------------------
           # Force DNS through Cloudflare for Families (1.1.1.3)
@@ -1160,11 +1203,14 @@ Resources:
               return chunks
 
 
-          # Response payload format (byte 0): 0x00 = plain UTF-8, 0x01 = gzip.
-          # The device relays these bytes opaquely; the browser reassembles every
-          # chunk, reads byte 0, and inflates with DecompressionStream when gzip.
+          # Response payload format (byte 0): 0x00 = plain UTF-8, 0x01 = gzip,
+          # 0x02 = brotli. The device relays these bytes opaquely; the browser
+          # reassembles every chunk, reads byte 0, and decodes once.
           RESP_FORMAT_PLAIN = 0x00
           RESP_FORMAT_GZIP = 0x01
+          RESP_FORMAT_BROTLI = 0x02
+          RESP_FORMAT_NAMES = {RESP_FORMAT_PLAIN: 'plain', RESP_FORMAT_GZIP: 'gzip',
+                               RESP_FORMAT_BROTLI: 'brotli'}
 
 
           def chunk_bytes(data, max_bytes):
@@ -1174,37 +1220,71 @@ Resources:
               return [data[i:i + max_bytes] for i in range(0, len(data), max_bytes)]
 
 
+          def _cut_utf8(raw, n):
+              """At most n bytes of raw, backed up so no UTF-8 char is split:
+              while the first byte left out is a continuation byte, the cut is
+              mid-character, so move it back to that character's start."""
+              n = max(0, min(n, len(raw)))
+              while 0 < n < len(raw) and (raw[n] & 0xC0) == 0x80:
+                  n -= 1
+              return raw[:n]
+
+
+          def _compress_best(data):
+              """(format, bytes) at full strength. Brotli 11 measured ~20% fewer
+              chunks than gzip on real pages; its built-in English/web dictionary
+              suits short text. Gzip only when the layer isn't there."""
+              if brotli is not None:
+                  return RESP_FORMAT_BROTLI, brotli.compress(data, quality=11)
+              return RESP_FORMAT_GZIP, gzip.compress(data, 9)
+
+
+          def _compressed_size_fast(data):
+              """Cheap size estimate for the truncation search. Brotli 9 is ~20x
+              faster than 11 and a little larger, so it errs on the side of fitting."""
+              if brotli is not None:
+                  return len(brotli.compress(data, quality=9))
+              return len(gzip.compress(data, 6))
+
+
           def build_response_payload(text, chunk_size):
               """Return the [format][data] byte payload to chunk and send.
 
-              Gzip-compresses the ButterFi markup when that is smaller (~3x on
-              real pages), else sends plain UTF-8. Fits within 255 chunks by
-              truncating the SOURCE text and recompressing (a gzip stream can't be
-              sliced); most pages fit without any truncation."""
+              Compresses the ButterFi markup (brotli, or gzip without the layer)
+              when that is smaller, else sends plain UTF-8. Fits within 255 chunks
+              by truncating the SOURCE text and recompressing (a compressed stream
+              can't be sliced); most pages fit without any truncation. The slow
+              full-strength encoder runs at most twice, so a huge page stays well
+              inside the Lambda timeout."""
               budget = chunk_size * 255 - 1  # -1 for the format byte
               raw = text.encode('utf-8')
-              comp = gzip.compress(raw, 6)
-              if len(comp) <= budget:
-                  if len(comp) < len(raw):
-                      return bytes([RESP_FORMAT_GZIP]) + comp
-                  if len(raw) <= budget:
-                      return bytes([RESP_FORMAT_PLAIN]) + raw
-              # Too big even compressed: shrink the source until the gzip fits.
-              target = len(raw)
+              # Markup compresses well under 8x, so anything past budget*8 can't
+              # be sent anyway; drop it before the encoders see it.
+              src = _cut_utf8(raw, budget * 8)
+              # Find how much source fits, using the fast estimate.
               for _ in range(8):
-                  if comp:
-                      target = min(target, int(target * budget / len(comp) * 0.95))
-                  cut = raw[:max(0, target)]
-                  while cut and (cut[-1] & 0xC0) == 0x80:  # don't split a UTF-8 char
-                      cut = cut[:-1]
-                  comp = gzip.compress(cut, 6)
+                  size = _compressed_size_fast(src)
+                  if size <= budget:
+                      break
+                  src = _cut_utf8(src, int(len(src) * budget / size * 0.97))
+              fmt, comp = _compress_best(src)
+              # The estimate is conservative, so a truncated page usually has room
+              # left at full strength: grow the cut once to use it.
+              if len(src) < len(raw) and 0 < len(comp) < budget * 0.95:
+                  grown = _cut_utf8(raw, int(len(src) * budget / len(comp) * 0.97))
+                  gfmt, gcomp = _compress_best(grown)
+                  if len(gcomp) <= budget:
+                      src, fmt, comp = grown, gfmt, gcomp
+              # Guard: if full strength somehow came out bigger than the estimate.
+              for _ in range(4):
                   if len(comp) <= budget:
-                      return bytes([RESP_FORMAT_GZIP]) + comp
-              # Fallback: plain, hard-truncated to the budget.
-              cut = raw[:budget]
-              while cut and (cut[-1] & 0xC0) == 0x80:
-                  cut = cut[:-1]
-              return bytes([RESP_FORMAT_PLAIN]) + cut
+                      break
+                  src = _cut_utf8(src, int(len(src) * 0.9))
+                  fmt, comp = _compress_best(src)
+              if len(comp) <= budget and len(comp) < len(src):
+                  return bytes([fmt]) + comp
+              # Plain: incompressible (tiny) text, or the fallback hard truncation.
+              return bytes([RESP_FORMAT_PLAIN]) + _cut_utf8(raw, budget)
 
 
           def send_downlink(device_id, request_id, chunk_idx, total_chunks, chunk_data):
@@ -1247,15 +1327,15 @@ Resources:
                   # Fetch and extract text
                   text = fetch_and_extract(query)
 
-                  # Compress (gzip when smaller) behind a 1-byte format header,
-                  # then chunk the opaque bytes. Fits within 255 chunks. The device
-                  # relays the bytes; the browser reads the header and inflates.
-                  # ~3x fewer downlink chunks over Sidewalk for real pages.
+                  # Compress (brotli, or gzip without the layer) behind a 1-byte
+                  # format header, then chunk the opaque bytes. Fits within 255
+                  # chunks. The device relays the bytes; the browser reads the
+                  # header and decodes. 3-4x fewer downlink chunks than plain text.
                   payload = build_response_payload(text, TEXT_CHUNK_SIZE)
                   chunks = chunk_bytes(payload, TEXT_CHUNK_SIZE)
                   total = min(len(chunks), 255)
 
-                  fmt = 'gzip' if payload[:1] == bytes([RESP_FORMAT_GZIP]) else 'plain'
+                  fmt = RESP_FORMAT_NAMES.get(payload[0], 'unknown')
                   print(f'Generated {total} chunks ({len(payload)}B {fmt}) from {len(text)} chars')
 
                   # A reused request_id (browse.js resets its counter to 1 on

@@ -1,6 +1,6 @@
 # XIAO Build
 
-This is the verified bootstrap and build flow for the active Seeed XIAO nRF52840
+This is the verified bootstrap and build flow for the active Seeed XIAO nRF52840 Plus
 firmware target in [firmware/xiao_nrf52840](../firmware/xiao_nrf52840).
 
 ## What You Need

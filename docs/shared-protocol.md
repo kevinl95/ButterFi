@@ -9,7 +9,7 @@ the Chrome Web Serial app — the authoritative reference for all three.
 - Chrome-based browsers only
 - USB CDC ACM transport between browser and device
 - Sidewalk transport between device and cloud
-- Chunked responses (gzip or plain) with explicit resend requests
+- Chunked responses (brotli, gzip or plain) with explicit resend requests
 
 ## Sidewalk Frames
 
@@ -34,7 +34,9 @@ All device-to-cloud frames use this header:
 - Message type: `0x02`
 - Payload length: exactly 1 byte
 - Payload byte 0: next needed chunk index
-- Semantics: request the cloud to resume sending chunks from that index
+- Semantics: request the cloud to resume sending chunks from that index. A
+  resend from index N also asserts that the host already holds chunks
+  `0..N-1`.
 
 #### Ack Frame
 
@@ -54,10 +56,20 @@ All device-to-cloud frames use this header:
 | 4..N | Payload | Opaque response bytes (see note) |
 
 The response bytes from every chunk (`4..N`), concatenated in chunk-index order,
-form one payload that starts with a 1-byte **format flag** — `0x00` = plain
-UTF-8, `0x01` = gzip — followed by the page bytes. The firmware forwards these
-bytes to the browser without interpreting them (USB frame `0x83`); the browser
-reads the flag and inflates gzip with the native `DecompressionStream`.
+form one payload that starts with a 1-byte **format flag**, followed by the
+page bytes:
+
+| Flag | Format | Browser decoder |
+|------|--------|-----------------|
+| `0x00` | Plain UTF-8 | `TextDecoder`; renders progressively from the received prefix |
+| `0x01` | gzip | Native `DecompressionStream("gzip")` |
+| `0x02` | Brotli | Google's reference decoder, vendored at `web/vendor/brotli-decode.js` (Chrome has no native brotli `DecompressionStream`) |
+
+The scraper sends Brotli (quality 11) normally. It sends gzip only if its Brotli
+Lambda layer is missing, and plain text only when compression wouldn't make the
+page smaller. Compressed payloads decode once all chunks have arrived. The
+firmware forwards these bytes to the browser without interpreting them (USB
+frame `0x83`).
 
 ## USB Serial Frames
 
@@ -154,6 +166,10 @@ further runtime serial steps (such as `0x06` config save).
 | 1 | Link state | `0=unknown`, `1=ble`, `2=fsk`, `3=lora` |
 | 2 | Active request ID | `0` if none |
 
+`4=busy` is reported only while Sidewalk is up. If the link drops with a
+request in flight, the state reads `2=sidewalk-starting` and byte 2 still
+carries the active request ID, so the browser knows to wait before resuming.
+
 ### Transfer Error Payload
 
 | Byte | Field | Notes |
@@ -176,8 +192,28 @@ Error code registry:
 
 - Firmware should forward `0x81` Sidewalk chunks to the browser as USB frame type
   `0x83` without rewriting the chunk body.
-- The browser should maintain user-visible progress from `chunk index` and
-  `total chunks`, but the firmware remains the authority for resend behavior.
+- The browser drives the transfer: it shows progress from `chunk index` and
+  `total chunks`, asks for the next missing chunk (`0x02`) whenever the stream
+  stalls, and treats the transfer as complete once it holds every chunk. The
+  device's `0x84` is a confirmation, not a requirement.
+- Transfers resume across a lost link or a device reboot. The browser keeps the
+  chunks it has and, once the device reports `3=sidewalk-ready` again, sends
+  `0x02` for the same request ID. The device adopts a resend for a request it
+  isn't tracking, and a resend from index N marks chunks `0..N-1` as received
+  so its own completion count can still finish. The cloud keeps chunks for
+  `ChunkTTLHours`. A resend for a *different* active request is rejected.
+- The browser never sends `0x02` before the first chunk of a request has
+  arrived. Request IDs restart at 1 on each page load, and the scraper clears a
+  request ID's old chunks only after it finishes fetching, so an early resend
+  could return a page from an earlier session. If chunk 0 doesn't come within a
+  minute online, the browser stops the page instead.
+- While the device is online but no new chunk arrives, the browser backs off
+  its resends (doubling gaps, at most once a minute) and stops the page after
+  10 minutes, so a dead transfer doesn't keep spending a neighbor gateway's
+  airtime. Time offline doesn't count toward that.
+- When the browser finishes or abandons a request the device is still
+  tracking, it releases it with `0x03` (cancel). A resulting `0x85` "request
+  not active" is expected and ignored.
 - The device rejects a second active host query while one request is in
   flight.
 - If the browser disconnects and reconnects, the device should emit a status

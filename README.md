@@ -1,7 +1,7 @@
 # ButterFi
 
 ButterFi is a self-hosted Sidewalk-to-web bridge for constrained student
-devices. This repo now centers on the Seeed XIAO nRF52840 firmware track, the
+devices. This repo now centers on the Seeed XIAO nRF52840 Plus firmware track, the
 browser tools around it, and the AWS backend that each owner deploys in their
 own AWS account to serve chunked text responses over Amazon Sidewalk.
 
@@ -32,7 +32,7 @@ flowchart LR
 
 ## Current Tracks
 
-- Active firmware target: Seeed XIAO nRF52840 in [firmware/xiao_nrf52840/](firmware/xiao_nrf52840)
+- Active firmware target: Seeed XIAO nRF52840 Plus in [firmware/xiao_nrf52840/](firmware/xiao_nrf52840)
 - Student text-only browser: [web/browse.html](web/browse.html)
 - Technical Web Serial console for the runtime device protocol: [web/index.html](web/index.html)
 - Browser provisioning and web-flash prototype: [web/provision.html](web/provision.html)
@@ -41,13 +41,27 @@ flowchart LR
 ## Ownership Model
 
 ButterFi is intended to be buyer-owned and self-hosted. A buyer can purchase a
-XIAO module or kit, deploy [template.yaml](template.yaml) into their own AWS
+XIAO nRF52840 Plus, deploy [template.yaml](template.yaml) into their own AWS
 account, register their own Sidewalk device, and use the browser provisioning
 page to flash a prebuilt UF2 plus their device credential. This repo does not
 assume a shared ButterFi-operated backend.
 
 The concrete owner workflow is documented in
 [docs/self-hosted-owner-setup.md](docs/self-hosted-owner-setup.md).
+
+## Hardware
+
+Use the **Seeed XIAO nRF52840 Plus** (or Plus Sense). The firmware transmits at
++8 dBm, which the Plus's FCC grant (Z4T-XIAO52840P, 0.006 W conducted) covers.
+In-home coverage is ButterFi's main limit, and that power is what makes it work:
+in testing from a house with no Amazon devices, the same spot that never
+connected at 0 dBm and rarely at +4 dBm connected every time at +8 dBm. Don't
+use the original XIAO nRF52840 — its grant (Z4T-XIAONRF52840) covers only about
++5 dBm.
+
+The Plus's grant requires end users to be told how to keep RF exposure within
+limits: keep the dongle at least 20 cm (8 in) from people while it's plugged
+in — on the desk or on a USB extension cable, not in a lap.
 
 ## Protocol
 
@@ -61,9 +75,10 @@ status/error registries — lives in one place:
 - **Dongle ↔ cloud (Sidewalk):** uplinks `0x01=query`, `0x02=resend`,
   `0x03=ack`; downlinks `0x81=response chunk`.
 - **Responses** are chunked; the reassembled payload starts with a 1-byte format
-  flag (`0x00` plain UTF-8, `0x01` gzip) that the dongle relays untouched and the
-  browser inflates — typically about a third of the chunks a page would
-  otherwise need over Sidewalk.
+  flag (`0x00` plain UTF-8, `0x01` gzip, `0x02` Brotli) that the dongle relays
+  untouched and the browser decodes. Brotli is the normal format: a quarter to a
+  third of the chunks a page would need as plain text, and about 20% fewer
+  than gzip on real pages.
 
 ### Flow
 
@@ -71,7 +86,7 @@ status/error registries — lives in one place:
 2. PWA sends query over Web Serial to the dongle
 3. Dongle transmits uplink (type=0x01) over Sidewalk
 4. IoT Core routes to Uplink Lambda → SQS → Scraper Lambda
-5. Scraper fetches the page, strips it to text, compresses it (gzip when smaller) behind a 1-byte format flag, and chunks the bytes into 236-byte pieces
+5. Scraper fetches the page, strips it to text, compresses it (Brotli when smaller) behind a 1-byte format flag, and chunks the bytes into 236-byte pieces
 6. Chunks stored in DynamoDB, first chunk sent as immediate downlink
 7. Device receives chunk 0, forwards it to the browser, and requests more via type=0x02 with the next needed chunk index
 8. Downlink Lambda reads from DynamoDB and sends next batch of chunks

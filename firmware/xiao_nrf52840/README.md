@@ -1,6 +1,8 @@
 # ButterFi XIAO Firmware
 
-Amazon Sidewalk firmware work for the Seeed Studio XIAO nRF52840.
+Amazon Sidewalk firmware work for the Seeed Studio XIAO nRF52840 Plus.
+It transmits at +8 dBm, which only the Plus's FCC grant covers; see
+[Hardware](../../README.md#hardware) before running it on any other XIAO.
 
 This directory is now the active firmware track for the repo.
 
@@ -52,7 +54,8 @@ firmware implements that protocol directly in `src/main.c` and
 
 3. **XIAO board support**
    The Seeed XIAO nRF52840 board files ship with nRF Connect SDK v2.3+
-   as `xiao_ble`. No manual override needed.
+   as `xiao_ble`. No manual override needed. The SDK has no separate Plus
+   board; the Plus uses the same nRF52840 and builds as `xiao_ble`.
 
 ## Build
 

@@ -493,8 +493,51 @@ export class ButterfiDevice extends EventTarget {
             return;
         }
 
-        await this._writeFrame(USB.frameHostResendRequest, this.transfer.requestId, Uint8Array.of(chunkIndex));
-        this._log("host", `Requested resend from chunk ${chunkIndex} for request ${this.transfer.requestId}`);
+        await this.requestResendFrom(chunkIndex);
+    }
+
+    // Ask the cloud to resend this transfer's chunks starting at `index`. The
+    // device adopts the request if it isn't tracking it (resume). Don't use it
+    // before the first chunk has arrived: request IDs repeat across page loads,
+    // so the cloud may still hold an earlier session's chunks under this ID.
+    async requestResendFrom(index) {
+        if (!this.transfer) {
+            return;
+        }
+
+        await this._writeFrame(USB.frameHostResendRequest, this.transfer.requestId, Uint8Array.of(index));
+        this._log("host", `Requested resend from chunk ${index} for request ${this.transfer.requestId}`);
+    }
+
+    // Re-attach a partially received transfer after a reconnect (a disconnect
+    // drops `this.transfer`) so pulling can resume it where it left off.
+    resumeTransfer(transfer) {
+        this.transfer = transfer;
+    }
+
+    // Tell the device to stop tracking a request (best effort; a no-op while
+    // disconnected). The device answers "request not active" if it already
+    // wasn't — callers should treat errors for released requests as noise.
+    releaseRequest(requestId) {
+        if (!this.writer) {
+            return;
+        }
+
+        this._writeFrame(USB.frameHostCancelRequest, requestId).catch(() => {});
+        this._log("host", `Released request ${requestId} on the device`);
+    }
+
+    // Drop a transfer without waiting on the device and release it there.
+    // Unlike cancelTransfer(), works while disconnected and emits no event.
+    abandonTransfer(transfer = this.transfer) {
+        if (!transfer) {
+            return;
+        }
+
+        if (this.transfer === transfer) {
+            this.transfer = null;
+        }
+        this.releaseRequest(transfer.requestId);
     }
 
     _ensureTransfer(requestId, totalChunks) {
@@ -551,18 +594,43 @@ export class ButterfiDevice extends EventTarget {
         const chunkIndex = payload[2];
         const totalChunks = payload[3];
         // Store the raw chunk BYTES (not a per-chunk string). The full payload
-        // is [format][data] and may be gzip, so it must be reassembled as bytes
-        // and decoded/inflated once (see decodeTransfer in browse.js).
+        // is [format][data] and usually compressed (brotli or gzip), so it must be
+        // reassembled as bytes and decoded once (see decodeTransfer in browse.js).
         const chunkBytes = payload.slice(4);
         const transfer = this._ensureTransfer(requestId, totalChunks);
 
         transfer.chunks[chunkIndex] = chunkBytes;
         this._log("device", `Chunk ${chunkIndex + 1}/${totalChunks} for request ${requestId}`);
         this.dispatchEvent(new CustomEvent("chunk", { detail: { transfer } }));
+        this._completeIfAllChunksPresent(transfer);
+    }
+
+    // The host decides completion as soon as it holds every chunk, rather than
+    // waiting only on the device's 0x84: after a resumed transfer the device
+    // never saw the chunks received before the interruption, so its own count
+    // may not finish. If the device is still tracking the request a moment
+    // later, release it so it isn't left Busy for the next query.
+    _completeIfAllChunksPresent(transfer) {
+        if (transfer.complete || transfer.totalChunks === 0 || transfer.chunks.some((chunk) => chunk === null)) {
+            return;
+        }
+
+        const requestId = transfer.requestId;
+        this._handleTransferComplete(requestId);
+        globalThis.setTimeout(() => {
+            if (this.deviceStatus.activeRequest === requestId) {
+                this.releaseRequest(requestId);
+            }
+        }, 1500);
     }
 
     _handleTransferComplete(requestId) {
         if (this.transfer && this.transfer.requestId === requestId) {
+            if (this.transfer.complete) {
+                // The device's 0x84 for a transfer the host already completed.
+                this._log("device", `Device confirmed request ${requestId} complete`);
+                return;
+            }
             this.transfer.complete = true;
         }
         this.dispatchEvent(new CustomEvent("complete", { detail: { requestId, transfer: this.transfer } }));

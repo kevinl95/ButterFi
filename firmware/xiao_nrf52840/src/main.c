@@ -117,6 +117,14 @@ static volatile uint8_t boot_fingerprint_ticks = 40;
 static char boot_info[80];
 static int boot_info_emits_remaining = 20;
 
+/* Last Sidewalk status line ("SID state=… reg=… time=…"), re-emitted next to
+ * boot_info for the same ~20s. The first status callback fires within a second
+ * or two of boot, before a host can open the port, so without the repeat a
+ * watcher never sees the boot-time registration / time-sync detail. Written by
+ * the Sidewalk callback, read by the USB thread — guarded by the spinlock. */
+static char sid_status_info[96];
+static struct k_spinlock sid_status_lock;
+
 static void populate_boot_info(void)
 {
     uint32_t lfstat = NRF_CLOCK->LFCLKSTAT;
@@ -163,19 +171,28 @@ static struct sid_handle *sid_handle   = NULL;
  *     SID_ERROR_INVALID_STATE before the device has time-synced.
  *
  *  2. The device NEVER completes its first connect (booted with no gateway in
- *     range). The beacon request can't help (INVALID_STATE) and the auto-connect
- *     policy doesn't retry, so it hangs on "Sidewalk starting" forever until a
- *     power cycle — fatal for a dongle that boots at a student's home. The only
- *     thing that recovers it is a fresh sid_start, so a watchdog reboots after
- *     BUTTERFI_INITIAL_CONNECT_REBOOT_MS (see maybe_reboot_if_initial_connect_stuck);
- *     it reconnects the instant a gateway becomes reachable. */
+ *     range). The beacon request can't help (INVALID_STATE), and the
+ *     auto-connect policy gives up for good after
+ *     connection_attempt_timeout_seconds, so it would hang on "Sidewalk
+ *     starting" until a power cycle — fatal for a dongle that boots at a
+ *     student's home. The only thing that recovers it is a fresh sid_start, so
+ *     a watchdog reboots after BUTTERFI_INITIAL_CONNECT_REBOOT_MS (see
+ *     maybe_reboot_if_initial_connect_stuck).
+ *
+ * The attempt window is long on purpose. It was 30 s (copied from Nordic's
+ * battery-sensor sample) with a 2 min reboot, so each cycle spent 25% of its
+ * time trying. At the edge of a neighbor gateway's range the first join (which
+ * includes time sync) can take longer than 30 s, and the reboot threw away the
+ * progress: a dongle that stayed reachable for a day once joined could not get
+ * through a cold boot. ButterFi is USB-powered, so the radio can keep trying. */
 static bool was_ready_once;
 static volatile bool reconnect_request_pending;
 static int64_t next_reconnect_arm_ms;
 #define BUTTERFI_RECONNECT_REARM_INTERVAL_MS 15000
-/* Give the auto-connect policy a couple of minutes on the initial connect before
- * the watchdog reboots to retry from a fresh sid_start. */
-#define BUTTERFI_INITIAL_CONNECT_REBOOT_MS 120000
+/* How long the auto-connect policy keeps trying on the initial connect. */
+#define BUTTERFI_CONNECT_ATTEMPT_S 600
+/* Reboot to retry from a fresh sid_start once that window has run out. */
+#define BUTTERFI_INITIAL_CONNECT_REBOOT_MS ((BUTTERFI_CONNECT_ATTEMPT_S + 30) * 1000LL)
 
 #define BUTTERFI_SIDEWALK_MSG_QUERY 0x01
 #define BUTTERFI_SIDEWALK_MSG_RESEND 0x02
@@ -240,7 +257,10 @@ static void refresh_usb_status(void)
         device_state = BUTTERFI_USB_DEVICE_STATE_ERROR;
     } else if (sidewalk_state == SIDEWALK_STATE_NOT_REGISTERED) {
         device_state = BUTTERFI_USB_DEVICE_STATE_SIDEWALK_NOT_REGISTERED;
-    } else if (request_in_flight) {
+    } else if (request_in_flight && sidewalk_state == SIDEWALK_STATE_READY) {
+        /* Busy only while the link is actually up. With the link down a request
+         * in flight reports "Sidewalk starting" (active request id still set),
+         * so the host can tell it must wait for Sidewalk before resuming. */
         device_state = BUTTERFI_USB_DEVICE_STATE_BUSY;
     } else if (sidewalk_state == SIDEWALK_STATE_READY) {
         device_state = BUTTERFI_USB_DEVICE_STATE_SIDEWALK_READY;
@@ -578,7 +598,10 @@ static void handle_host_frame(uint8_t frame_type,
                                                "usb control debug build");
         break;
 #else
-        if (payload_len != 1 || !request_in_flight || request_id != active_request_id) {
+        /* A resend for a request this device isn't tracking is a resume (the
+         * device rebooted, or a send error reset the transfer) and is adopted
+         * below; only a resend for a *different* active request is rejected. */
+        if (payload_len != 1 || (request_in_flight && request_id != active_request_id)) {
             (void)butterfi_usb_send_transfer_error(request_id,
                                                    BUTTERFI_USB_ERROR_PROTOCOL_MISMATCH,
                                                    "invalid resend request");
@@ -602,6 +625,18 @@ static void handle_host_frame(uint8_t frame_type,
                                                    BUTTERFI_USB_ERROR_CLOUD_FETCH_FAILED,
                                                    "resend uplink failed");
             break;
+        }
+
+        if (!request_in_flight) {
+            start_transfer_state(request_id);
+        }
+
+        /* "Resend from N" asserts the host already holds chunks 0..N-1. Count
+         * them as received so completion still fires on a resumed transfer,
+         * where this device never saw the chunks from before the interruption.
+         * Idempotent for an ordinary resend (those chunks are already marked). */
+        for (uint8_t idx = 0; idx < payload[0]; idx++) {
+            (void)mark_chunk_received(idx);
         }
 
         (void)butterfi_usb_send_uplink_accepted(request_id);
@@ -751,6 +786,13 @@ static void on_status_changed(const struct sid_status *status, void *context)
                    status->detail.link_status_mask);
     (void)butterfi_usb_send_debug_text(dbg);
 
+    {
+        k_spinlock_key_t key = k_spin_lock(&sid_status_lock);
+
+        memcpy(sid_status_info, dbg, sizeof(sid_status_info));
+        k_spin_unlock(&sid_status_lock, key);
+    }
+
     switch (status->state) {
     case SID_STATE_READY:
     case SID_STATE_SECURE_CHANNEL_READY:
@@ -890,7 +932,7 @@ static int sidewalk_init(void)
             .link_type = SID_LINK_TYPE_1,
             .enable = true,
             .priority = 0,
-            .connection_attempt_timeout_seconds = 30,
+            .connection_attempt_timeout_seconds = BUTTERFI_CONNECT_ATTEMPT_S,
         };
 
         err = sid_option(sid_handle, SID_OPTION_SET_LINK_CONNECTION_POLICY,
@@ -1089,7 +1131,19 @@ static void usb_thread_fn(void *a, void *b, void *c)
              * attaches shortly after boot still catches it, without flooding
              * the debug channel during later protocol tests. */
             if (boot_info[0] != '\0' && boot_info_emits_remaining > 0) {
+                /* static, not stack: this thread's stack is only 1024 bytes. */
+                static char sid_line[sizeof(sid_status_info)];
+                k_spinlock_key_t key;
+
                 (void)butterfi_usb_send_debug_text(boot_info);
+
+                key = k_spin_lock(&sid_status_lock);
+                memcpy(sid_line, sid_status_info, sizeof(sid_line));
+                k_spin_unlock(&sid_status_lock, key);
+                if (sid_line[0] != '\0') {
+                    (void)butterfi_usb_send_debug_text(sid_line);
+                }
+
                 boot_info_emits_remaining--;
             }
             next_usb_status_ms = k_uptime_get() + 1000;
