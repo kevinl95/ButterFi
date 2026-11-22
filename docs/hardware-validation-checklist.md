@@ -111,6 +111,12 @@ coexist with the way the Sidewalk stack already owns the settings subsystem /
 settings_storage — making it work would be its own integration task, and it
 only treats the address symptom anyway. Reverted.
 
+*(2026-11 update: `BT_SETTINGS` was the wrong lever. It only persists the
+identity key across reboots. The churn within one boot comes from sdk-sidewalk
+deleting and recreating its advertising set on every start, and Zephyr giving
+each new set a fresh RPA. `CONFIG_BT_RPA_SHARING=y` fixes that and is now in
+`prj.sidewalk.conf`; see the comment there. Hardware verification pending.)*
+
 **Where it stands:** the FFN *handshake* fails (post-connection), the RPA churn
 is downstream, and the failure reason is not visible over USB telemetry.
 Everything reachable without more visibility is exhausted.
