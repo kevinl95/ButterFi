@@ -206,6 +206,12 @@ adding domains. Matching covers subdomains (`example.com` also covers
 `www.example.com`). Search keeps working in allow-only mode — a search result is
 checked when the student opens it.
 
+The safety checks fail closed. If the scraper can't read the policy table and has
+no recent copy, it refuses the page instead of falling back to the open web. If
+the Cloudflare for Families resolver can't be reached, nothing is fetched, rather
+than resolving through an unfiltered DNS server. URLs typed as IP addresses are
+refused, because the DNS filter can't judge them.
+
 Edit it with `scripts/manage-policy.py` (needs `boto3` + AWS creds for the
 school's account; resolves the table from the stack):
 

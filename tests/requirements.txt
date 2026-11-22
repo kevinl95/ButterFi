@@ -1,0 +1,3 @@
+# Test-only dependency: the loader parses template.yaml to pull out each
+# Lambda's inline source. Everything else is the standard library.
+PyYAML==6.0.2

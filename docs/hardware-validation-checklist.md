@@ -10,6 +10,21 @@ once.
 Run each step in order. Don't move to the next step until the current one
 passes.
 
+> **Current status (2026-11):** the full round trip works on hardware — the
+> XIAO registers on Sidewalk and browsing works end to end. The dated sections
+> below are the investigation log and describe problems that are now fixed:
+>
+> - **Sidewalk registration** was solved 2026-08-10. The mfg Ed25519 identity
+>   key import needs SHA-512, which sdk-sidewalk only enables for nRF54L, so on
+>   nRF52840 the import failed (PSA -134) and the FFN challenge was never signed.
+>   The fix is one line, `CONFIG_PSA_WANT_ALG_SHA_512=y`, bisected on hardware as
+>   the sole fix. Upstream report draft: [upstream-sha512-issue.md](./upstream-sha512-issue.md).
+> - **The `0x06` config-save hang** was a `usb_thread` stack overflow, fixed
+>   2026-08-07 (see the third-session update below).
+>
+> Read "open", "still unresolved" and "next test" in the dated sections as
+> history, not as current state.
+
 ## Results as of 2026-08-05
 
 A first real round trip was run against a live `us-east-1` deployment.
@@ -28,12 +43,12 @@ one AWS gotcha came out of this run:
   post-reboot reconnect logic (a double-close that masked real errors, and
   retrying a stale `SerialPort` object instead of re-resolving it via
   `getPorts()`).
-- **Open bug**: the `0x06` config-save frame reliably hangs the device (LED
+- **Open bug (fixed 2026-08-07, see below)**: the `0x06` config-save frame reliably hangs the device (LED
   goes dark, no further USB responses, requires a physical reset to
   recover). Reproduced multiple times, independent of the credential-write
   work above. Root cause not found — needs a debug probe (SWD/RTT) for real
   firmware logs, which wasn't available during this test.
-- **Open item (see 2026-08-06 deep-dive below)**: Sidewalk BLE registration
+- **Open item (solved 2026-08-10, see Current status)**: Sidewalk BLE registration
   did not complete. `link_state` flickers to `BLE` briefly but never holds
   long enough to reach `SID_STATE_READY`.
 - **AWS gotcha**: Sidewalk device profile/wireless device creation returned
@@ -46,7 +61,7 @@ one AWS gotcha came out of this run:
   sit there indefinitely from an old, harmless event and look like a hang.
   Don't trust the LED alone — confirm with `probe-butterfi-status.py`.
 
-## Sidewalk registration deep-dive as of 2026-08-06 (still unresolved)
+## Sidewalk registration deep-dive as of 2026-08-06 (since solved — see Current status)
 
 Second session, focused entirely on the registration block. Added live
 Sidewalk telemetry over USB debug frame `0x87` (`on_status_changed` and
@@ -150,7 +165,7 @@ hardware, but **registration still does not complete** (device stays
   build flags in the boot frame (`SW=1 DBG=0` confirmed), removed the dead
   `LOG_BACKED_RPC` typo and the no-op `LOG_PROCESS_THREAD_STACK_SIZE`.
 
-**Still open after all of the above:** Sidewalk registration. The definitive
+**Still open after all of the above (as of 2026-08-07; solved 2026-08-10):** Sidewalk registration. The definitive
 next test remains the stock Nordic `sid_end_device` sample on an **nRF52840
 DK** through the same Echo (bisects XIAO-board/provisioning vs
 gateway/Amazon-side). Deferred review follow-ups, in priority order: (1) get
@@ -208,7 +223,7 @@ completing the relay of our **prototype**-cert device to Amazon's Sidewalk
 network; (b) an Amazon-network-side authorization/propagation issue for the
 device; (c) a board-level RF/BLE-timing quirk on the XIAO.
 
-**The definitive next test (not yet run):** flash the **stock** Nordic
+**The definitive next test (never needed — registration was solved 2026-08-10 by the SHA-512 fix):** flash the **stock** Nordic
 `sid_end_device` sample on a **Nordic nRF52840 DK** (the sample ships board
 configs only for the DKs, not `xiao_ble`), provision fresh credentials, and
 try to register through the same Echo. Registers → the problem is our XIAO
@@ -280,11 +295,11 @@ now a three-step flow, not two:
 
 Expect: the flash completes (ignoring the expected mid-write disconnect),
 the device re-enumerates after the credential-write reboot, and the
-config-save step returns a `config_saved` (`0x88`) frame. **As of
-2026-08-05 the config-save step reliably hangs the device instead — see the
-open bug above.** If you hit it, the credential write itself has already
-succeeded and persisted; you don't need to redo it, just recover the board
-(single-tap reset) and treat config-save as a known-broken step for now.
+config-save step returns a `config_saved` (`0x88`) frame. The 2026-08-05
+hang on this step was a `usb_thread` stack overflow, fixed 2026-08-07. That
+session also saw config-save return no `0x88` while the radio was up (the
+device stays alive); if that happens, the credential write has already
+succeeded and persisted, so you don't need to redo it.
 
 ## 3. Stack deploy + Sidewalk device registration
 
@@ -303,7 +318,7 @@ aws cloudformation deploy \
   --template-file template.yaml \
   --s3-bucket "$BUCKET" \
   --stack-name butterfi \
-  --capabilities CAPABILITY_NAMED_IAM \
+  --capabilities CAPABILITY_IAM \
   --region us-east-1
 ```
 
@@ -369,13 +384,19 @@ requiring a fresh query from the browser.
 
 ## 7. DNS filter sanity check
 
-The scraper Lambda forces DNS resolution through Cloudflare for Families
-(1.1.1.3) as a content-safety net for student traffic (see the
-`_cf_getaddrinfo` monkey-patch in the `ScraperLambda` inline code in
-`template.yaml`). Before a pilot, fetch a handful of sites the classroom
-will actually use and confirm none of them are false-positived by that
-filter. If a needed site is blocked, that's a Cloudflare for Families
-policy question, not a bug in this repo.
+The scraper Lambda resolves every student fetch through Cloudflare for
+Families (1.1.1.3, then 1.0.0.3) as a content-safety net (`resolve_public` in
+the `ScraperLambda` inline code in `template.yaml`), and connects only to the
+public addresses it returned. It fails closed: if Cloudflare can't be reached
+the page isn't fetched, and URLs typed as IP addresses are refused. Before a
+pilot, fetch a handful of sites the classroom will actually use and confirm
+none of them are false-positived by that filter. If a needed site is blocked,
+that's a Cloudflare for Families policy question, not a bug in this repo.
+
+Testing the scraper code from a laptop: many networks (this one included)
+block outbound UDP to public DNS servers, so every fetch fails with "the safety
+filter could not be reached". That is the fail-closed path working; test from
+Lambda instead.
 
 ## 8. Record the result
 

@@ -660,112 +660,164 @@ Resources:
               brotli = None
 
           # -------------------------------------------------------
-          # Force DNS through Cloudflare for Families (1.1.1.3)
-          # Blocks malware + adult content at the resolver level.
-          # This is a safety net for student-facing infrastructure.
+          # Student fetches resolve through Cloudflare for Families (1.1.1.3),
+          # which blocks malware and adult sites at the resolver. Only the fetch
+          # path uses it (boto3's AWS calls keep the normal resolver), so there is
+          # no name-based exemption a student URL could ride (an S3 website or
+          # API Gateway host under .amazonaws.com used to skip the filter).
+          #
+          # Every check here fails CLOSED: if Cloudflare can't be reached the page
+          # is not fetched (no fallback to an unfiltered resolver), and URLs typed
+          # as IP addresses are refused (the filter can't judge them). The answers
+          # are checked (public addresses only) and the connection goes to exactly
+          # those addresses, so a domain can't pass the check with one answer and
+          # then rebind to 127.0.0.1 or 169.254.169.254 for the real connect.
           # -------------------------------------------------------
-          import ctypes
-          try:
-              _libc = ctypes.CDLL('libc.so.6')
-          except OSError:
-              _libc = None
+          import struct
+          import http.client
 
-          CF_FAMILIES_DNS = '1.1.1.3'
-          CF_FAMILIES_DNS_ALT = '1.0.0.3'
+          CF_FAMILIES_DNS = ('1.1.1.3', '1.0.0.3')
 
           # A bare hostname like "cnn.com" or "text.npr.org/story" (no scheme)
           # should be fetched as a URL, not sent to search. Match one+ dotted
           # labels ending in a letters-only TLD, with an optional port/path.
           BARE_DOMAIN = re.compile(r'^(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[:/?#].*)?$', re.I)
 
-          _original_getaddrinfo = socket.getaddrinfo
 
-          def _cf_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
-              """Resolve hostnames via Cloudflare for Families (1.1.1.3).
-              Falls back to default resolver if CF is unreachable."""
-              # Don't intercept IP literals or AWS service endpoints
-              # (boto3 needs to reach AWS APIs without filtering)
+          class FetchBlocked(Exception):
+              """A safety check refused this fetch. str() is a user-facing reason."""
+
+
+          def _skip_dns_name(resp, offset):
+              """Offset just past a DNS name (labels, ending in 0 or a pointer)."""
+              while True:
+                  n = resp[offset]
+                  if n & 0xC0 == 0xC0:
+                      return offset + 2
+                  if n == 0:
+                      return offset + 1
+                  offset += n + 1
+
+
+          def parse_dns_a_reply(resp, tx_id):
+              """IPv4 strings from a DNS reply; [] for NXDOMAIN / no A records.
+              Raises ValueError on a mismatched, failed or truncated reply."""
+              if len(resp) < 12 or resp[:2] != tx_id or not resp[2] & 0x80:
+                  raise ValueError('mismatched DNS reply')
+              if resp[2] & 0x02:
+                  raise ValueError('truncated DNS reply')
+              rcode = resp[3] & 0x0F
+              if rcode == 3:  # NXDOMAIN
+                  return []
+              if rcode != 0:
+                  raise ValueError(f'DNS error rcode={rcode}')
+              qdcount, ancount = struct.unpack('!HH', resp[4:8])
+              offset = 12
+              for _ in range(qdcount):
+                  offset = _skip_dns_name(resp, offset) + 4  # + qtype, qclass
+              ips = []
+              for _ in range(ancount):  # CNAMEs are skipped; their A records follow
+                  offset = _skip_dns_name(resp, offset)
+                  rtype, _cls, _ttl, rdlen = struct.unpack('!HHIH', resp[offset:offset + 10])
+                  offset += 10
+                  if rtype == 1 and rdlen == 4:
+                      ips.append(socket.inet_ntoa(resp[offset:offset + 4]))
+                  offset += rdlen
+              return ips
+
+
+          def _dns_query_a(name, server, timeout=3):
+              """Minimal DNS A query over UDP (name is already IDNA/ASCII)."""
+              tx_id = os.urandom(2)
+              qname = b''.join(bytes([len(l)]) + l.encode('ascii') for l in name.split('.'))
+              packet = (tx_id + b'\x01\x00'                     # recursion desired
+                        + b'\x00\x01\x00\x00\x00\x00\x00\x00'  # 1 question
+                        + qname + b'\x00' + b'\x00\x01\x00\x01')  # A, IN
+              sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+              sock.settimeout(timeout)
               try:
-                  socket.inet_aton(host)
-                  return _original_getaddrinfo(host, port, family, type, proto, flags)
-              except socket.error:
+                  sock.sendto(packet, (server, 53))
+                  resp, _ = sock.recvfrom(4096)
+              finally:
+                  sock.close()
+              return parse_dns_a_reply(resp, tx_id)
+
+
+          def resolve_public(host):
+              """Family-filtered public IPv4 addresses for host, or raise FetchBlocked."""
+              host = (host or '').strip().rstrip('.').lower()
+              try:
+                  ipaddress.ip_address(host)
+              except ValueError:
                   pass
-
-              AWS_SUFFIXES = ('.amazonaws.com', '.aws.amazon.com', '.amazon.com')
-              if any(host.endswith(s) for s in AWS_SUFFIXES):
-                  return _original_getaddrinfo(host, port, family, type, proto, flags)
-
-              # Resolve via Cloudflare for Families using system DNS-over-UDP
-              import struct
-              def _dns_query(name, dns_server, timeout=3):
-                  """Minimal DNS A-record query."""
-                  # Build DNS query packet
-                  tx_id = os.urandom(2)
-                  flags = b'\x01\x00'  # standard query, recursion desired
-                  counts = b'\x00\x01\x00\x00\x00\x00\x00\x00'  # 1 question
-                  qname = b''
-                  for label in name.split('.'):
-                      qname += bytes([len(label)]) + label.encode('ascii')
-                  qname += b'\x00'
-                  qtype = b'\x00\x01'   # A record
-                  qclass = b'\x00\x01'  # IN class
-                  packet = tx_id + flags + counts + qname + qtype + qclass
-
-                  sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                  sock.settimeout(timeout)
-                  try:
-                      sock.sendto(packet, (dns_server, 53))
-                      resp, _ = sock.recvfrom(1024)
-                  finally:
-                      sock.close()
-
-                  # Parse answer section (skip header + question)
-                  # Header is 12 bytes, question is variable
-                  offset = 12
-                  # Skip question
-                  while resp[offset] != 0:
-                      offset += resp[offset] + 1
-                  offset += 5  # null byte + qtype(2) + qclass(2)
-
-                  # Read answers
-                  ips = []
-                  ancount = struct.unpack('!H', resp[6:8])[0]
-                  for _ in range(ancount):
-                      # Skip name (may be pointer)
-                      if resp[offset] & 0xC0 == 0xC0:
-                          offset += 2
-                      else:
-                          while resp[offset] != 0:
-                              offset += resp[offset] + 1
-                          offset += 1
-                      rtype = struct.unpack('!H', resp[offset:offset+2])[0]
-                      rdlen = struct.unpack('!H', resp[offset+8:offset+10])[0]
-                      offset += 10
-                      if rtype == 1 and rdlen == 4:  # A record
-                          ips.append(socket.inet_ntoa(resp[offset:offset+4]))
-                      offset += rdlen
-                  return ips
-
+              else:
+                  raise FetchBlocked('addresses typed as numbers are not allowed; '
+                                     'use the site\'s name')
               try:
-                  ips = _dns_query(host, CF_FAMILIES_DNS)
-                  if not ips:
-                      ips = _dns_query(host, CF_FAMILIES_DNS_ALT)
-              except Exception:
-                  # Cloudflare unreachable — fall back to default
-                  return _original_getaddrinfo(host, port, family, type, proto, flags)
-
+                  name = host.encode('idna').decode('ascii')
+              except UnicodeError:
+                  raise FetchBlocked('that is not a valid site name')
+              labels = name.split('.')
+              if not name or len(name) > 253 or any(not l or len(l) > 63 for l in labels):
+                  raise FetchBlocked('that is not a valid site name')
+              ips, last_err = None, None
+              for server in CF_FAMILIES_DNS:
+                  try:
+                      ips = _dns_query_a(name, server)
+                      break
+                  except Exception as exc:
+                      last_err = exc
+              if ips is None:
+                  print(f'family DNS unreachable: {last_err}')
+                  raise FetchBlocked('the safety filter could not be reached, so '
+                                     'nothing was fetched. Try again in a minute')
               if not ips:
-                  # Domain blocked by Cloudflare for Families or NXDOMAIN
-                  raise socket.gaierror(f'DNS resolution blocked for {host} (Cloudflare for Families)')
-
-              # Convert to getaddrinfo-style response
-              results = []
+                  raise FetchBlocked('that site could not be found')
+              if '0.0.0.0' in ips:  # Cloudflare for Families' answer for a blocked site
+                  raise FetchBlocked('that site is blocked by the safety filter')
               for ip in ips:
-                  results.append((socket.AF_INET, socket.SOCK_STREAM, 6, '', (ip, port or 80)))
-              return results
+                  addr = ipaddress.ip_address(ip)
+                  if not addr.is_global or addr.is_multicast:
+                      raise FetchBlocked(f'that site points to a non-public address ({ip})')
+              return ips
 
-          # Monkey-patch socket.getaddrinfo globally for this Lambda
-          socket.getaddrinfo = _cf_getaddrinfo
+
+          def _pinned_create_connection(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT,
+                                        source_address=None, **kwargs):
+              """socket.create_connection, but only to resolve_public's vetted IPs."""
+              host, port = address
+              last_err = None
+              for ip in resolve_public(host):
+                  try:
+                      return socket.create_connection((ip, port), timeout, source_address)
+                  except OSError as exc:
+                      last_err = exc
+              raise last_err
+
+
+          # http.client connects through self._create_connection; TLS then wraps
+          # the socket with server_hostname=self.host, so SNI and certificate
+          # checks still use the real name.
+          class _PinnedHTTPConnection(http.client.HTTPConnection):
+              def __init__(self, *args, **kwargs):
+                  super().__init__(*args, **kwargs)
+                  self._create_connection = _pinned_create_connection
+
+
+          class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+              def __init__(self, *args, **kwargs):
+                  super().__init__(*args, **kwargs)
+                  self._create_connection = _pinned_create_connection
+
+
+          class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+              def http_open(self, req):
+                  return self.do_open(_PinnedHTTPConnection, req)
+
+
+          class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+              def https_open(self, req):
+                  return self.do_open(_PinnedHTTPSConnection, req, context=self._context)
 
           dynamodb = boto3.resource('dynamodb')
           iot_wireless = boto3.client('iotwireless')
@@ -1037,9 +1089,18 @@ Resources:
           #   3. otherwise                             -> allow
           # An empty table = open web (the default). Lists are cached for a short
           # TTL so we don't hit DynamoDB per fetch; a warm container keeps the
-          # last-known-good list if a refresh fails.
+          # last-known-good list if a refresh fails. With no list to go on (cold
+          # start + read error) it fails CLOSED: an allow-only school must never
+          # get the open web because a DynamoDB read failed.
           _POLICY_TTL_SECONDS = 60
           _policy_cache = {'ts': 0.0, 'allow': None, 'block': None}
+          POLICY_UNAVAILABLE_MSG = (
+              "Your school's site list could not be checked just now, so this "
+              "page was not opened. Try again in a minute.")
+
+
+          class PolicyUnavailable(Exception):
+              """The policy table couldn't be read and there is no cached copy."""
 
 
           def _query_policy_list(list_type):
@@ -1062,7 +1123,8 @@ Resources:
 
           def load_policy():
               """Return (allow, block) domain lists, cached. Empty when no policy
-              table is set; last-known-good on a refresh failure."""
+              table is set; last-known-good on a refresh failure. Raises
+              PolicyUnavailable when the read fails and nothing is cached."""
               if not POLICY_TABLE:
                   return [], []
               now = time.time()
@@ -1075,7 +1137,7 @@ Resources:
               except Exception as exc:
                   print(f'policy load failed: {exc}')
                   if _policy_cache['allow'] is None:
-                      return [], []  # cold start + read error -> fail open to today's behavior
+                      raise PolicyUnavailable() from exc  # fail closed
               return _policy_cache['allow'], _policy_cache['block']
 
 
@@ -1092,7 +1154,10 @@ Resources:
           def is_url_permitted(url):
               """Apply the school's allowlist/blocklist to a user-navigable URL.
               Returns (ok, user_facing_message)."""
-              allow, block = load_policy()
+              try:
+                  allow, block = load_policy()
+              except PolicyUnavailable:
+                  return False, POLICY_UNAVAILABLE_MSG
               host = urllib.parse.urlparse(url).hostname or ''
               if _host_on_list(host, block):
                   return False, "This site is blocked by your school's content policy."
@@ -1107,8 +1172,9 @@ Resources:
               The scraper fetches user-controlled URLs, so without this a query
               like http://169.254.169.254/... or http://localhost/... would turn
               it into an open proxy into internal networks / the metadata service.
-              Resolve the host and reject any non-global address (private,
-              loopback, link-local, reserved, multicast)."""
+              This is the pre-flight check that gives a readable reason; the real
+              enforcement is the connection itself, which re-resolves through
+              resolve_public and connects only to the addresses it vetted."""
               try:
                   parsed = urllib.parse.urlparse(url)
               except Exception:
@@ -1118,15 +1184,13 @@ Resources:
               host = parsed.hostname
               if not host:
                   return False, 'missing host'
-              port = parsed.port or (443 if parsed.scheme == 'https' else 80)
               try:
-                  infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
-              except socket.gaierror as exc:
-                  return False, f'could not resolve host ({exc})'
-              for info in infos:
-                  ip = ipaddress.ip_address(info[4][0])
-                  if not ip.is_global or ip.is_multicast:
-                      return False, f'host resolves to non-public address {ip}'
+                  parsed.port  # raises ValueError for a malformed port
+                  resolve_public(host)
+              except ValueError:
+                  return False, 'bad port number'
+              except FetchBlocked as exc:
+                  return False, str(exc)
               return True, 'ok'
 
 
@@ -1160,17 +1224,56 @@ Resources:
           )
 
 
+          # Only pages the text converter can use are downloaded. Anything else (a
+          # PDF, an image, a video, a zip) is refused from its Content-Type before
+          # the body is read. The body is read up to a cap, and within the fetch
+          # timeout overall: the converter and the 255-chunk budget can't use more,
+          # and an unbounded read of a large download could exhaust the Lambda's
+          # memory. A page cut at the cap still renders its first part.
+          FETCH_TEXT_TYPES = ('text/html', 'application/xhtml+xml', 'text/plain')
+          FETCH_MAX_BYTES = 3 * 1024 * 1024
+          FETCH_READ_BLOCK = 64 * 1024
+          _TYPE_NAMES = {'application/pdf': 'a PDF file'}
+
+
+          def _read_capped(resp, limit, deadline):
+              """Up to limit bytes of the body, stopping early at the deadline."""
+              parts, size = [], 0
+              while size < limit and time.monotonic() < deadline:
+                  block = resp.read(min(FETCH_READ_BLOCK, limit - size))
+                  if not block:
+                      break
+                  parts.append(block)
+                  size += len(block)
+              if size >= limit:
+                  print(f'fetch body cut at {limit} bytes')
+              elif time.monotonic() >= deadline:
+                  print(f'fetch body cut at {size} bytes (deadline)')
+              return b''.join(parts)
+
+
           def _fetch(url, timeout):
-              """GET url through the SSRF-guarded opener -> (status, final_url, html)."""
+              """GET url through the SSRF-guarded opener -> (status, final_url, html).
+              Raises FetchBlocked for a non-public address, an unreachable safety
+              filter, or a response that isn't a text page."""
               req = urllib.request.Request(url, headers={
                   'User-Agent': 'ButterFi/1.0 (educational-access-bridge)'
               })
-              opener = urllib.request.build_opener(_SSRFGuardedRedirect)
+              # Pinned handlers replace urllib's default HTTP(S) handlers; the empty
+              # ProxyHandler ignores any proxy environment variables.
+              opener = urllib.request.build_opener(
+                  urllib.request.ProxyHandler({}), _PinnedHTTPHandler,
+                  _PinnedHTTPSHandler, _SSRFGuardedRedirect)
               # opener.open (not urllib.request.urlopen) so the redirect guard
               # applies; the initial URL is validated by is_safe_fetch_url.
+              deadline = time.monotonic() + timeout
               with opener.open(req, timeout=timeout) as resp:
-                  return (resp.status, resp.url,
-                          resp.read().decode('utf-8', errors='replace'))
+                  ctype = resp.headers.get_content_type()  # 'text/plain' if absent
+                  if ctype not in FETCH_TEXT_TYPES:
+                      kind = _TYPE_NAMES.get(ctype, f'a file ({ctype})')
+                      raise FetchBlocked(f'it is {kind}, not a web page ButterFi can show')
+                  body = _read_capped(resp, FETCH_MAX_BYTES, deadline)
+                  return resp.status, resp.url, body.decode('utf-8', errors='replace')
 
 
           def _is_search_challenge(status, html):
@@ -1233,6 +1336,8 @@ Resources:
               try:
                   _, final_url, html = _fetch(url, timeout=15)
                   return html_to_butterfi(html, source_url=final_url)
+              except FetchBlocked as e:
+                  return f'Cannot open that address ({e}).'
               except Exception as e:
                   return f'Error fetching content: {str(e)}'
 
@@ -1482,12 +1587,67 @@ Resources:
           import json
           import os
           import base64
+          import time
           import boto3
 
           dynamodb = boto3.resource('dynamodb')
           iot_wireless = boto3.client('iotwireless')
 
           CHUNK_TABLE = os.environ['CHUNK_TABLE']
+
+          # Chunks sent per resend request. Kept at 3 until bigger batches are
+          # proven safe on a link that is reconnecting. AWS documents no
+          # per-device Sidewalk downlink limit; the API limit is
+          # SendDataToWirelessDevice at 10 TPS per account (adjustable).
+          # Measured 2026-11-21 over one BLE gateway: on a link that was already
+          # up, bursts of 3, 6, 10 and 15 back-to-back downlinks all arrived
+          # (34/34). But a page load at 10 per batch whose first burst landed
+          # just as the idle link was reconnecting dropped the BLE link
+          # mid-burst. It then churned through ~1 s connections, and after that
+          # the gateway (an Echo Show inches away) stopped connecting to the
+          # dongle at all: 55 min, through two dongle reboots, until the Echo
+          # itself was restarted. Seen once and not proven causal, but a
+          # student can't restart a neighbor's gateway, so bigger bursts stay
+          # off until they're shown to be safe. At 3 a 46-chunk page took
+          # 91.5 s (16 resends) with the link up throughout. A throttled send
+          # (several students at once) backs off and retries instead of
+          # ending the batch.
+          RESEND_BATCH = 3
+          THROTTLE_RETRY_DELAYS_S = (0.25, 0.5, 1.0)
+          # Total time one invocation may spend backing off. Stays well inside the
+          # 15 s timeout: an async invoke that times out is retried by Lambda,
+          # which would send the whole batch again.
+          RETRY_BUDGET_S = 5.0
+
+
+          def _is_throttle(exc):
+              code = getattr(exc, 'response', {}).get('Error', {}).get('Code', '')
+              return code in ('ThrottlingException', 'TooManyRequestsException')
+
+
+          def send_with_retry(device_id, payload, seq, deadline):
+              """One downlink; retried with backoff only when the API throttles,
+              and only while the invocation's retry deadline allows."""
+              for delay in THROTTLE_RETRY_DELAYS_S + (None,):
+                  try:
+                      return iot_wireless.send_data_to_wireless_device(
+                          Id=device_id,      # WirelessDeviceId (UUID) from the resend topic
+                          TransmitMode=0,
+                          PayloadData=base64.b64encode(payload).decode('ascii'),
+                          # Sidewalk downlinks require WirelessMetadata (see scraper).
+                          WirelessMetadata={
+                              'Sidewalk': {
+                                  'Seq': seq,
+                                  'MessageType': 'CUSTOM_COMMAND_ID_NOTIFY'
+                              }
+                          }
+                      )
+                  except Exception as exc:
+                      if (delay is None or not _is_throttle(exc)
+                              or time.monotonic() + delay > deadline):
+                          raise
+                      print(f'throttled; retrying in {delay}s')
+                      time.sleep(delay)
 
 
           # Every downlink needs a fresh Sidewalk Seq. The device's duplicate filter
@@ -1541,36 +1701,20 @@ Resources:
 
               total = int(items[0].get('total', len(items)))  # DynamoDB numbers read as Decimal
 
-              # Send chunks starting from requested index
-              # Rate-limit: Sidewalk has uplink/downlink rate limits,
-              # so we send a few at a time and let the device re-request
-              max_send = 3  # conservative batch to avoid rate limiting
+              # Send the next RESEND_BATCH chunks from the requested index; the
+              # browser asks again from its first missing chunk when they stop.
               sent = 0
-
               batch = [it for it in items
-                       if int(it['chunkKey'].split('#')[1]) >= start_idx][:max_send]
+                       if int(it['chunkKey'].split('#')[1]) >= start_idx][:RESEND_BATCH]
               seqs = reserve_seqs(table, device_id, len(batch)) if batch else []
+              deadline = time.monotonic() + RETRY_BUDGET_S
 
               for item, seq in zip(batch, seqs):
                   idx = int(item['chunkKey'].split('#')[1])
-
                   chunk_data = base64.b64decode(item['data'])
                   payload = bytes([0x81, request_id, idx, total]) + chunk_data
-                  payload_b64 = base64.b64encode(payload).decode('ascii')
-
                   try:
-                      iot_wireless.send_data_to_wireless_device(
-                          Id=device_id,      # WirelessDeviceId (UUID) from the resend topic
-                          TransmitMode=0,
-                          PayloadData=payload_b64,
-                          # Sidewalk downlinks require WirelessMetadata (see scraper).
-                          WirelessMetadata={
-                              'Sidewalk': {
-                                  'Seq': seq,
-                                  'MessageType': 'CUSTOM_COMMAND_ID_NOTIFY'
-                              }
-                          }
-                      )
+                      send_with_retry(device_id, payload, seq, deadline)
                       print(f'Resent chunk {idx}/{total} to {device_id}')
                       sent += 1
                   except Exception as e:

@@ -1,0 +1,44 @@
+name: Unit tests
+
+# Unit tests for the inline Lambdas (loaded straight from template.yaml, so
+# they test the code that deploys) and the browser modules (protocol.js,
+# butterfi-markup.js). No AWS access or network needed.
+#
+# Local:  pip install -r tests/requirements.txt
+#         python -m unittest discover -s tests
+#         node --test tests/web/*.test.mjs
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The Scraper uses brotli when the layer is present, gzip without it.
+        brotli: [ with-brotli, without-brotli ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"  # the Lambda runtime
+      - run: pip install -r tests/requirements.txt
+      - if: matrix.brotli == 'with-brotli'
+        run: pip install brotli==1.2.1  # match the layer (BrotliLayerKey)
+      - run: python -m unittest discover -s tests -v
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --test tests/web/*.test.mjs

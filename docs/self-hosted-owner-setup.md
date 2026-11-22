@@ -52,7 +52,7 @@ Notes:
 
 - the template URL must be reachable by AWS over HTTPS
 - for CloudFormation quick-create, the template URL itself must point to an S3 object
-- the deploy still needs `CAPABILITY_NAMED_IAM` acknowledgment in the console
+- the deploy still needs the IAM acknowledgment in the console ("AWS CloudFormation might create IAM resources"; `CAPABILITY_IAM` on the CLI)
 - GitHub Pages or another HTTPS site can host the helper page, but not the CloudFormation template target for quick-create
 
 CLI deploy is also supported. The template is over CloudFormation's
@@ -66,7 +66,7 @@ aws cloudformation deploy \
   --template-file template.yaml \
   --s3-bucket "$BUCKET" \
   --stack-name butterfi \
-  --capabilities CAPABILITY_NAMED_IAM \
+  --capabilities CAPABILITY_IAM \
   --region us-east-1
 ```
 
