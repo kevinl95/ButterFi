@@ -41,6 +41,7 @@
 #include <sid_error.h>
 #include <sid_pal_common_ifc.h>
 #include <app_ble_config.h>
+#include <sid_ble_config_ifc.h>
 #endif
 
 #include "butterfi_config.h"
@@ -193,6 +194,13 @@ static int64_t next_reconnect_arm_ms;
 #define BUTTERFI_CONNECT_ATTEMPT_S 600
 /* Reboot to retry from a fresh sid_start once that window has run out. */
 #define BUTTERFI_INITIAL_CONNECT_REBOOT_MS ((BUTTERFI_CONNECT_ATTEMPT_S + 30) * 1000LL)
+/* How long the BLE link to the gateway stays up with no Sidewalk traffic. The
+ * SDK default is 30 s (SID_SDK_CONFIG_BLE_INACTIVITY_TIMEOUT_SEC), shorter than
+ * the time a student spends reading a page, so every click landed on a link
+ * that was cycling down/up and a downlink could fall into the gap. 300 s is the
+ * SDK maximum. Costs: we hold one of a neighbor gateway's BLE connection slots
+ * for longer. Not yet checked against Sidewalk qualification requirements. */
+#define BUTTERFI_BLE_INACTIVITY_TIMEOUT_S 300
 
 #define BUTTERFI_SIDEWALK_MSG_QUERY 0x01
 #define BUTTERFI_SIDEWALK_MSG_RESEND 0x02
@@ -877,6 +885,48 @@ static int sidewalk_platform_init_once(void)
     return 0;
 }
 
+/* Raise the BLE inactivity timeout (see BUTTERFI_BLE_INACTIVITY_TIMEOUT_S).
+ * The SDK disagrees with itself on units: sid_sdk_config.h and the sample's
+ * shell help say seconds, but the sample's DUT log prints the value times
+ * 10 ms. So read the current value first: the default is 30 s, which reads as
+ * 30 if the unit is seconds or 3000 if it is 10 ms. Scale our value to match,
+ * and log before/after so the unit is confirmed on hardware. */
+static void set_ble_inactivity_timeout(void)
+{
+    struct sid_ble_user_config cfg = {
+        .is_set = false,
+        .cfg_type = SID_BLE_USER_CFG_INACTIVITY_TIMEOUT,
+    };
+    uint32_t before;
+    uint32_t target;
+    sid_error_t err;
+
+    err = sid_option(sid_handle, SID_OPTION_BLE_USER_CONFIG, &cfg, sizeof(cfg));
+    if (err != SID_ERROR_NONE) {
+        LOG_ERR("get BLE inactivity timeout failed: %d", err);
+        return;
+    }
+    before = cfg.inactivity_timeout;
+    target = (before >= 1000U) ? BUTTERFI_BLE_INACTIVITY_TIMEOUT_S * 100U
+                               : BUTTERFI_BLE_INACTIVITY_TIMEOUT_S;
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.is_set = true;
+    cfg.cfg_type = SID_BLE_USER_CFG_INACTIVITY_TIMEOUT;
+    cfg.inactivity_timeout = target;
+    err = sid_option(sid_handle, SID_OPTION_BLE_USER_CONFIG, &cfg, sizeof(cfg));
+    if (err != SID_ERROR_NONE) {
+        LOG_ERR("set BLE inactivity timeout %u failed: %d", target, err);
+        return;
+    }
+
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.cfg_type = SID_BLE_USER_CFG_INACTIVITY_TIMEOUT;
+    err = sid_option(sid_handle, SID_OPTION_BLE_USER_CONFIG, &cfg, sizeof(cfg));
+    LOG_INF("BLE inactivity timeout: was %u, set %u, now %u (err=%d)",
+            before, target, cfg.inactivity_timeout, err);
+}
+
 static int sidewalk_init(void)
 {
     int ret;
@@ -947,6 +997,8 @@ static int sidewalk_init(void)
             LOG_ERR("set auto-connect params failed: %d", err);
         }
     }
+
+    set_ble_inactivity_timeout();
 
     LOG_INF("Sidewalk stack started");
     return 0;

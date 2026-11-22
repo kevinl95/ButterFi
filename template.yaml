@@ -177,6 +177,7 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:BatchWriteItem
                   - dynamodb:Query
+                  - dynamodb:UpdateItem   # Seq counter (reserve_seqs)
                 Resource: !GetAtt ChunkTable.Arn
               - Effect: Allow
                 Action:
@@ -212,6 +213,7 @@ Resources:
                 Action:
                   - dynamodb:Query
                   - dynamodb:GetItem
+                  - dynamodb:UpdateItem   # Seq counter (reserve_seqs)
                 Resource: !GetAtt ChunkTable.Arn
               - Effect: Allow
                 Action:
@@ -1288,7 +1290,28 @@ Resources:
               return bytes([RESP_FORMAT_PLAIN]) + _cut_utf8(raw, budget)
 
 
-          def send_downlink(device_id, request_id, chunk_idx, total_chunks, chunk_data):
+          # Every downlink needs a fresh Sidewalk Seq. The device's duplicate filter
+          # drops a message whose Seq matches one of its ~10 most recent, silently
+          # (no error on either side). Seq used to be the chunk index, which repeats
+          # on every page and every resend: after a short page (Seq 0-4) the next
+          # page's chunk 0 was dropped, and so was every retry. A per-device counter
+          # in ChunkTable (chunkKey "seq", no ttl) hands out increasing values;
+          # Sidewalk accepts 0-16383, so it wraps there.
+          SEQ_KEY = 'seq'
+          SEQ_MOD = 16384
+
+
+          def reserve_seqs(table, device_id, n):
+              resp = table.update_item(
+                  Key={'deviceId': device_id, 'chunkKey': SEQ_KEY},
+                  UpdateExpression='ADD seqCounter :n',
+                  ExpressionAttributeValues={':n': n},
+                  ReturnValues='UPDATED_NEW',
+              )
+              end = int(resp['Attributes']['seqCounter'])
+              return [(end - n + i) % SEQ_MOD for i in range(n)]
+
+          def send_downlink(device_id, request_id, chunk_idx, total_chunks, chunk_data, seq):
               """Send a single chunk as a Sidewalk downlink."""
               payload = bytes([0x81, request_id, chunk_idx, total_chunks]) + chunk_data
               payload_b64 = base64.b64encode(payload).decode('ascii')
@@ -1302,7 +1325,7 @@ Resources:
                       # SendDataToWirelessDevice fails ValidationException.
                       WirelessMetadata={
                           'Sidewalk': {
-                              'Seq': chunk_idx,
+                              'Seq': seq,
                               'MessageType': 'CUSTOM_COMMAND_ID_NOTIFY'
                           }
                       }
@@ -1369,7 +1392,8 @@ Resources:
 
                   # Send first chunk immediately as downlink
                   if chunks:
-                      send_downlink(device_id, request_id, 0, total, chunks[0])
+                      send_downlink(device_id, request_id, 0, total, chunks[0],
+                                    reserve_seqs(table, device_id, 1)[0])
 
               return {'statusCode': 200}
 
@@ -1417,6 +1441,28 @@ Resources:
           CHUNK_TABLE = os.environ['CHUNK_TABLE']
 
 
+          # Every downlink needs a fresh Sidewalk Seq. The device's duplicate filter
+          # drops a message whose Seq matches one of its ~10 most recent, silently
+          # (no error on either side). Seq used to be the chunk index, which repeats
+          # on every page and every resend: after a short page (Seq 0-4) the next
+          # page's chunk 0 was dropped, and so was every retry. A per-device counter
+          # in ChunkTable (chunkKey "seq", no ttl) hands out increasing values;
+          # Sidewalk accepts 0-16383, so it wraps there.
+          SEQ_KEY = 'seq'
+          SEQ_MOD = 16384
+
+
+          def reserve_seqs(table, device_id, n):
+              resp = table.update_item(
+                  Key={'deviceId': device_id, 'chunkKey': SEQ_KEY},
+                  UpdateExpression='ADD seqCounter :n',
+                  ExpressionAttributeValues={':n': n},
+                  ReturnValues='UPDATED_NEW',
+              )
+              end = int(resp['Attributes']['seqCounter'])
+              return [(end - n + i) % SEQ_MOD for i in range(n)]
+
+
           def handler(event, context):
               print(json.dumps(event))
 
@@ -1452,12 +1498,12 @@ Resources:
               max_send = 3  # conservative batch to avoid rate limiting
               sent = 0
 
-              for item in items:
+              batch = [it for it in items
+                       if int(it['chunkKey'].split('#')[1]) >= start_idx][:max_send]
+              seqs = reserve_seqs(table, device_id, len(batch)) if batch else []
+
+              for item, seq in zip(batch, seqs):
                   idx = int(item['chunkKey'].split('#')[1])
-                  if idx < start_idx:
-                      continue
-                  if sent >= max_send:
-                      break
 
                   chunk_data = base64.b64decode(item['data'])
                   payload = bytes([0x81, request_id, idx, total]) + chunk_data
@@ -1471,7 +1517,7 @@ Resources:
                           # Sidewalk downlinks require WirelessMetadata (see scraper).
                           WirelessMetadata={
                               'Sidewalk': {
-                                  'Seq': idx,
+                                  'Seq': seq,
                                   'MessageType': 'CUSTOM_COMMAND_ID_NOTIFY'
                               }
                           }
